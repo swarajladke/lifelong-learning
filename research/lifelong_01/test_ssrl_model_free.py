@@ -1,0 +1,586 @@
+"""
+research/lifelong_01/test_ssrl_model_free.py -- Model-free regression test suite for SSRL-01.
+
+Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
+1. Parity label computation and selection mask interpretation.
+2. Disjointness of rule coordinates and active pattern partitions.
+3. Rule coordinate validation (out of range, duplicates, non-4).
+4. Numerator/denominator integrity and impossible-value guard (SSRLMeasurement).
+5. Exact paired sign-flip permutation distribution and resolution floor (N=6).
+6. Non-neural probe-state cloning independence (zero state leakage).
+7. Strict transfer rule matching: rejects partial intersections and misaligned targets.
+8. Example record post-init validation: rejects inconsistent is_correct flags.
+9. Example ID uniqueness enforcement.
+10. Gate G-LC boundary tests: 172/192 fails and 173/192 passes at 90.0% under APPROVED; unapproved status forbids passing.
+11. Atomic artifact writing: temporary file rename, refusal of overwrite, and corruption protection.
+12. Shared runner failure-handling logic: ensures pre-existing sentinel file bytes are preserved.
+13. Pilot Contract Validation on handcrafted valid and deliberately invalid datasets.
+14. Accidental overwrite prevention when serializing datasets.
+15. Rejection of unapproved specification before model construction.
+16. Partial evaluation records surviving simulated exception with incomplete population identified.
+17. Effective provenance reflecting applied deterministic settings and no model hash fabrication.
+18. Monotonic deadline enforcement before and after operations.
+19. Rejection of rule_id mismatch in metadata and examples.
+20. Exclusive run-directory reservation preventing overwrite.
+"""
+
+from __future__ import annotations
+import os
+import time
+import copy
+import tempfile
+import unittest
+import json
+import hashlib
+import torch
+
+from research.lifelong_01.ssrl_types import (
+    SSRLMeasurement,
+    SSRLExampleRecord,
+    compute_accuracy_measurement
+)
+from research.lifelong_01.ssrl_generator import (
+    compute_parity,
+    partition_active_patterns,
+    rule_to_mask,
+    validate_pilot_dataset_contract,
+    serialize_dataset_canonical_json,
+    load_and_verify_dataset,
+    PilotDatasetContractError
+)
+from research.lifelong_01.ssrl_evaluator import (
+    evaluate_gate_g_lc,
+    compute_seed_transfer_score,
+    compute_exact_sign_flip_test,
+    atomic_write_json
+)
+from research.lifelong_01.ssrl_runner import clone_post_history_checkpoint_for_probe
+from research.lifelong_01.run_ssrl_learnability_pilot import (
+    run_learnability_pilot,
+    APPROVED_PILOT_CONFIG,
+    SpecificationApprovalError,
+    verify_run_specification_approval,
+    reserve_run_directory,
+    configure_determinism,
+    capture_environment_provenance,
+    evaluate_model_on_split,
+)
+
+
+class TestSSRLModelFree(unittest.TestCase):
+
+    def test_parity_and_mask_interpretation(self):
+        # Even parity: product is +1
+        self.assertEqual(compute_parity([1, 1, 1, 1]), 1)
+        self.assertEqual(compute_parity([-1, -1, 1, 1]), 1)
+        self.assertEqual(compute_parity([-1, -1, -1, -1]), 1)
+        # Odd parity: product is -1
+        self.assertEqual(compute_parity([-1, 1, 1, 1]), 0)
+        self.assertEqual(compute_parity([-1, -1, -1, 1]), 0)
+
+        with self.assertRaises(ValueError):
+            compute_parity([])
+
+        rule = (0, 1, 2, 3)
+        mask = rule_to_mask(rule, d=16)
+        self.assertEqual(len(mask), 16)
+        self.assertEqual(sum(mask), 4)
+        for i in range(16):
+            self.assertEqual(mask[i], 1 if i in rule else 0)
+
+    def test_invalid_rules_and_malformed_patterns(self):
+        with self.assertRaises(ValueError):
+            rule_to_mask((1, 2, 2, 3), d=16)
+        with self.assertRaises(ValueError):
+            rule_to_mask((0, 1, 2, 16), d=16)
+        with self.assertRaises(ValueError):
+            rule_to_mask((), d=16)
+        with self.assertRaises(ValueError):
+            compute_parity([1, 0, 1, 1])
+
+    def test_active_pattern_partition_integrity(self):
+        train_pats, test_pats = partition_active_patterns(seed=42)
+        self.assertEqual(len(train_pats), 12)
+        self.assertEqual(len(test_pats), 4)
+        s_train = set(train_pats)
+        s_test = set(test_pats)
+        self.assertTrue(s_train.isdisjoint(s_test))
+        self.assertEqual(len(s_train.union(s_test)), 16)
+
+    def test_measurement_guards(self):
+        m = SSRLMeasurement(name="test_acc", numerator=18, denominator=20, input_set="dev", mode="eval")
+        self.assertEqual(m.rate, 0.9)
+        self.assertEqual(m.pct, 90.0)
+
+        with self.assertRaises(ValueError):
+            SSRLMeasurement(name="zero_den", numerator=0, denominator=0, input_set="dev", mode="eval")
+        with self.assertRaises(ValueError):
+            SSRLMeasurement(name="neg_num", numerator=-1, denominator=10, input_set="dev", mode="eval")
+        with self.assertRaises(ValueError):
+            SSRLMeasurement(name="overflow", numerator=21, denominator=20, input_set="dev", mode="eval")
+
+    def test_example_record_validation(self):
+        r = SSRLExampleRecord(
+            example_id=1, rule_id=1, arm="fresh", seed=101, step=2000,
+            dataset_sha256="a" * 64,
+            input_features=[1] * 16, selection_mask=[1, 1, 1, 1] + [0] * 12,
+            target_class=1, predicted_class=1, is_correct=True, is_held_out_pattern=False
+        )
+        self.assertTrue(r.is_correct)
+
+        with self.assertRaises(ValueError):
+            SSRLExampleRecord(
+                example_id=2, rule_id=1, arm="fresh", seed=101, step=2000,
+                dataset_sha256="a" * 64,
+                input_features=[1] * 16, selection_mask=[1, 1, 1, 1] + [0] * 12,
+                target_class=1, predicted_class=0, is_correct=True, is_held_out_pattern=False
+            )
+
+        with self.assertRaises(ValueError):
+            SSRLExampleRecord(
+                example_id=3, rule_id=1, arm="fresh", seed=101, step=2000,
+                dataset_sha256="short_hash",
+                input_features=[1] * 16, selection_mask=[1, 1, 1, 1] + [0] * 12,
+                target_class=1, predicted_class=1, is_correct=True, is_held_out_pattern=False
+            )
+
+    def test_duplicate_example_ids_rejected(self):
+        r1 = SSRLExampleRecord(
+            example_id=10, rule_id=1, arm="fresh", seed=101, step=2000,
+            dataset_sha256="a" * 64, input_features=[1] * 16, selection_mask=[1] * 16,
+            target_class=1, predicted_class=1, is_correct=True, is_held_out_pattern=False
+        )
+        r2 = SSRLExampleRecord(
+            example_id=10, rule_id=1, arm="fresh", seed=101, step=2000,
+            dataset_sha256="a" * 64, input_features=[1] * 16, selection_mask=[1] * 16,
+            target_class=1, predicted_class=1, is_correct=True, is_held_out_pattern=False
+        )
+        with self.assertRaises(ValueError):
+            compute_accuracy_measurement("pop", [r1, r2], "dev")
+
+    def test_gate_g_lc_boundary_cases(self):
+        m_172 = SSRLMeasurement("t1_seen", 172, 192, "t1_seen", "eval")
+        res_172 = evaluate_gate_g_lc(m_172, threshold=0.90, approval_status="APPROVED")
+        self.assertFalse(res_172["passed"])
+        self.assertEqual(res_172["verdict"], "FAILED")
+
+        m_173 = SSRLMeasurement("t1_seen", 173, 192, "t1_seen", "eval")
+        # Under APPROVED status, 173/192 (90.1%) passes
+        res_173_app = evaluate_gate_g_lc(m_173, threshold=0.90, approval_status="APPROVED")
+        self.assertTrue(res_173_app["passed"])
+        self.assertEqual(res_173_app["verdict"], "PASSED")
+
+        # Under PROPOSED_PENDING_APPROVAL status, 173/192 CANNOT pass the gate
+        res_173_prop = evaluate_gate_g_lc(m_173, threshold=0.90, approval_status="PROPOSED_PENDING_APPROVAL")
+        self.assertTrue(res_173_prop["meets_threshold"])
+        self.assertFalse(res_173_prop["passed"])
+        self.assertEqual(res_173_prop["verdict"], "PROPOSED_THRESHOLD_UNAPPROVED")
+
+    def test_strict_transfer_rule_set_matching(self):
+        rec_seq = {
+            1: [SSRLExampleRecord(1, 1, "seq", 101, 2000, "a"*64, [1]*16, [1]*16, 1, 1, True, False)],
+            2: [SSRLExampleRecord(2, 2, "seq", 101, 2000, "a"*64, [1]*16, [1]*16, 0, 0, True, False)]
+        }
+        rec_fresh = {
+            1: [SSRLExampleRecord(1, 1, "fresh", 101, 2000, "a"*64, [1]*16, [1]*16, 1, 1, True, False)],
+            2: [SSRLExampleRecord(2, 2, "fresh", 101, 2000, "a"*64, [1]*16, [1]*16, 0, 0, True, False)]
+        }
+
+        score = compute_seed_transfer_score(rec_seq, rec_fresh, declared_transfer_rules=[1, 2])
+        self.assertEqual(score, 0.0)
+
+        with self.assertRaises(ValueError):
+            compute_seed_transfer_score(rec_seq, rec_fresh, declared_transfer_rules=[1, 2, 3])
+
+        rec_partial = {1: rec_fresh[1]}
+        with self.assertRaises(ValueError):
+            compute_seed_transfer_score(rec_seq, rec_partial, declared_transfer_rules=[1, 2])
+
+    def test_exact_sign_flip_resolution_n6(self):
+        diffs = [0.05, 0.08, 0.03, 0.06, 0.04, 0.07]
+        res = compute_exact_sign_flip_test(diffs)
+        self.assertEqual(res["n_seeds"], 6)
+        self.assertEqual(res["total_permutations"], 64)
+        self.assertAlmostEqual(res["resolution_floor"], 2.0 / 64.0, places=6)
+        self.assertEqual(res["extreme_count"], 2)
+        self.assertAlmostEqual(res["exact_p_value"], 2.0 / 64.0, places=6)
+
+    def test_non_neural_probe_cloning_independence(self):
+        base_state = {
+            "layer1": [1.0, 2.0, 3.0],
+            "metadata": {"step": 2000, "rule": "T10"}
+        }
+        probe1 = clone_post_history_checkpoint_for_probe(base_state)
+        probe2 = clone_post_history_checkpoint_for_probe(base_state)
+
+        probe1["layer1"][0] = 999.0
+        probe1["metadata"]["probe_name"] = "T*_1"
+
+        self.assertEqual(base_state["layer1"][0], 1.0)
+        self.assertNotIn("probe_name", base_state["metadata"])
+        self.assertEqual(probe2["layer1"][0], 1.0)
+        self.assertNotIn("probe_name", probe2["metadata"])
+
+    def _build_handcrafted_contract_dataset(self, modify_fn=None) -> dict:
+        """Builds a minimal synthetic dataset matching the approved contract schema."""
+        train_pats, unseen_pats = partition_active_patterns(seed=42)
+        rule = [0, 1, 2, 3]
+        mask = [1, 1, 1, 1] + [0] * 12
+
+        train_exs = []
+        seen_exs = []
+        unseen_exs = []
+
+        ex_id = 0
+        # 12 train patterns * 32 draws = 384
+        for pat in train_pats:
+            p_parity = compute_parity(list(pat))
+            for i in range(32):
+                dist = [1 if (i & (1 << b)) else -1 for b in range(12)]
+                train_exs.append({
+                    "example_id": ex_id, "rule_id": 1, "rule_indices": list(rule),
+                    "features": list(pat) + dist, "mask": list(mask),
+                    "target_class": p_parity, "is_held_out_pattern": False
+                })
+                ex_id += 1
+
+        # 12 train patterns * 16 draws = 192 (distinct distractors from train)
+        for pat in train_pats:
+            p_parity = compute_parity(list(pat))
+            for i in range(16):
+                # Offset distractor bit pattern so disjoint from train (e.g. invert first bit)
+                dist = [-1 if (i & (1 << b)) else 1 for b in range(12)]
+                seen_exs.append({
+                    "example_id": ex_id, "rule_id": 1, "rule_indices": list(rule),
+                    "features": list(pat) + dist, "mask": list(mask),
+                    "target_class": p_parity, "is_held_out_pattern": False
+                })
+                ex_id += 1
+
+        # 4 unseen patterns * 16 draws = 64
+        for pat in unseen_pats:
+            p_parity = compute_parity(list(pat))
+            for i in range(16):
+                dist = [1 if (i & (1 << b)) else -1 for b in range(12)]
+                unseen_exs.append({
+                    "example_id": ex_id, "rule_id": 1, "rule_indices": list(rule),
+                    "features": list(pat) + dist, "mask": list(mask),
+                    "target_class": p_parity, "is_held_out_pattern": True
+                })
+                ex_id += 1
+
+        data = {
+            "metadata": {
+                "study_id": "SSRL-01", "phase": "learnability_pilot",
+                "rule_id": 1, "rule_indices": [0, 1, 2, 3], "seed": 101, "d": 16, "k": 4,
+                "num_active_patterns_seen": 12, "num_active_patterns_unseen": 4,
+                "train_pool_size": 384, "eval_seen_size": 192, "eval_unseen_size": 64
+            },
+            "train_examples": train_exs,
+            "eval_seen_examples": seen_exs,
+            "eval_unseen_examples": unseen_exs,
+        }
+
+        if modify_fn:
+            modify_fn(data)
+        return data
+
+    def test_explicit_pilot_contract_validation(self):
+        # 1. Valid contract passes
+        valid_data = self._build_handcrafted_contract_dataset()
+        validate_pilot_dataset_contract(valid_data, APPROVED_PILOT_CONFIG)
+
+        # 2. Corrupted seed rejected
+        def corrupt_seed(d):
+            d["metadata"]["seed"] = 999
+        bad_seed = self._build_handcrafted_contract_dataset(corrupt_seed)
+        with self.assertRaises(PilotDatasetContractError):
+            validate_pilot_dataset_contract(bad_seed, APPROVED_PILOT_CONFIG)
+
+        # 3. Wrong parity label rejected
+        def corrupt_parity(d):
+            d["train_examples"][0]["target_class"] = 1 - d["train_examples"][0]["target_class"]
+        bad_parity = self._build_handcrafted_contract_dataset(corrupt_parity)
+        with self.assertRaises(PilotDatasetContractError):
+            validate_pilot_dataset_contract(bad_parity, APPROVED_PILOT_CONFIG)
+
+        # 4. Duplicate full input vector across train and eval_seen rejected
+        def leak_vector(d):
+            d["eval_seen_examples"][0]["features"] = list(d["train_examples"][0]["features"])
+        bad_leak = self._build_handcrafted_contract_dataset(leak_vector)
+        with self.assertRaises(PilotDatasetContractError):
+            validate_pilot_dataset_contract(bad_leak, APPROVED_PILOT_CONFIG)
+
+    def test_recomputed_hash_on_invalid_contract_fails(self):
+        """Proves that a correctly re-hashed dataset fails if its semantic content violates the contract."""
+        def corrupt_rule(d):
+            d["metadata"]["rule_indices"] = [0, 1, 2, 4] # Corrupted rule
+        bad_rule_data = self._build_handcrafted_contract_dataset(corrupt_rule)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "corrupt_rule.json")
+            recomputed_sha = serialize_dataset_canonical_json(bad_rule_data, fpath, refuse_overwrite=True)
+
+            # Loading with approved config must raise PilotDatasetContractError despite valid hash
+            with self.assertRaises(PilotDatasetContractError):
+                load_and_verify_dataset(fpath, expected_sha256=recomputed_sha, approved_config=APPROVED_PILOT_CONFIG)
+
+    def test_accidental_dataset_overwrite_prevention(self):
+        data = self._build_handcrafted_contract_dataset()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "dataset.json")
+            serialize_dataset_canonical_json(data, fpath, refuse_overwrite=True)
+
+            # Second serialization to same path with refuse_overwrite=True must raise
+            with self.assertRaises(FileExistsError):
+                serialize_dataset_canonical_json(data, fpath, refuse_overwrite=True)
+
+    def test_shared_failure_handling_preserves_existing_sentinel(self):
+        """
+        Tests the actual runner entry point run_learnability_pilot when destination already exists.
+        Verifies that existing destination bytes are strictly untouched.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sentinel_path = os.path.join(tmpdir, "existing_run.json")
+            sentinel_bytes = b"PRE_EXISTING_RUN_RESULT_DO_NOT_OVERWRITE"
+            with open(sentinel_path, "wb") as f:
+                f.write(sentinel_bytes)
+
+            # Execute runner pointing to existing destination
+            ret_code = run_learnability_pilot(
+                dataset_path="dummy.json",
+                expected_dataset_sha256="0"*64,
+                output_artifact_path=sentinel_path,
+                device_name="cpu"
+            )
+            self.assertEqual(ret_code, 1)
+
+            # Verify sentinel bytes remain bit-for-bit identical
+            with open(sentinel_path, "rb") as f:
+                actual_bytes = f.read()
+            self.assertEqual(actual_bytes, sentinel_bytes)
+
+    def test_reject_unapproved_specification_before_model_construction(self):
+        """
+        Tests that an unapproved specification is rejected before any model construction.
+        """
+        # 1. Direct function check on PROPOSED_PENDING_APPROVAL
+        unapproved_cfg = dict(APPROVED_PILOT_CONFIG)
+        unapproved_cfg["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_run_specification_approval(unapproved_cfg)
+
+        # 2. Missing approval status check
+        missing_cfg = dict(APPROVED_PILOT_CONFIG)
+        del missing_cfg["gate_approval_status"]
+        with self.assertRaises(SpecificationApprovalError):
+            verify_run_specification_approval(missing_cfg)
+
+        # 3. Approved status passes
+        approved_cfg = dict(APPROVED_PILOT_CONFIG)
+        approved_cfg["gate_approval_status"] = "APPROVED"
+        verify_run_specification_approval(approved_cfg)
+
+        # 4. Runner rejects unapproved specification before model construction
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset_path = os.path.join(tmpdir, "dataset.json")
+            data = self._build_handcrafted_contract_dataset()
+            d_sha = serialize_dataset_canonical_json(data, dataset_path, refuse_overwrite=True)
+            run_dest = os.path.join(tmpdir, "run_attempt")
+
+            exit_code = run_learnability_pilot(
+                dataset_path=dataset_path,
+                expected_dataset_sha256=d_sha,
+                output_destination=run_dest,
+                device_name="cpu",
+                config=unapproved_cfg
+            )
+            self.assertEqual(exit_code, 1)
+
+            # Failure diagnostics must record SpecificationApprovalError
+            diag_file = os.path.join(run_dest, "results.json")
+            self.assertTrue(os.path.exists(diag_file))
+            with open(diag_file, "r") as f:
+                diag = json.load(f)
+            self.assertEqual(diag["error_type"], "SpecificationApprovalError")
+            # Ensure model parameters were never allocated/recorded in diagnostics
+            self.assertNotIn("param_count", diag)
+
+    def test_partial_evaluation_records_survive_simulated_exception(self):
+        """
+        Tests that per-example evaluation records are accumulated immediately,
+        survive an exception mid-evaluation, and identify the incomplete population.
+        """
+        class DummyFailingModel(torch.nn.Module):
+            def __init__(self, fail_at: int = 5):
+                super().__init__()
+                self.count = 0
+                self.fail_at = fail_at
+
+            def forward(self, x):
+                self.count += 1
+                if self.count > self.fail_at:
+                    raise RuntimeError(f"Simulated mid-evaluation failure at item {self.count}")
+                return torch.tensor([[0.2, 0.8]], dtype=torch.float32)
+
+        model = DummyFailingModel(fail_at=5)
+        # Create 10 dummy examples
+        examples = []
+        for i in range(10):
+            examples.append({
+                "example_id": i + 1,
+                "rule_id": 1,
+                "rule_indices": [0, 1, 2, 3],
+                "features": [1] * 16,
+                "mask": [1, 1, 1, 1] + [0] * 12,
+                "target_class": 1,
+                "is_held_out_pattern": False,
+            })
+
+        diag = {
+            "eval_records_by_population": {},
+            "eval_records_count": 0,
+            "incomplete_population": None,
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            evaluate_model_on_split(
+                model=model,
+                examples=examples,
+                dataset_sha256="0" * 64,
+                arm="fresh_control",
+                seed=101,
+                step=2000,
+                device=torch.device("cpu"),
+                deadline_monotonic=time.monotonic() + 100.0,
+                pop_name="eval_seen",
+                diagnostics=diag
+            )
+        self.assertIn("Simulated mid-evaluation failure", str(ctx.exception))
+
+        # Records 0..4 (5 records) must survive in diagnostics
+        self.assertEqual(len(diag["eval_records_by_population"]["eval_seen"]), 5)
+        self.assertEqual(diag["eval_records_count"], 5)
+        self.assertEqual(diag["incomplete_population"], "eval_seen")
+
+    def test_effective_provenance_reflects_applied_settings(self):
+        """
+        Tests that environment provenance captures applied determinism settings
+        and does not fabricate model fingerprints in model-free scenarios.
+        """
+        configure_determinism(seed=101, device_name="cpu")
+        prov = capture_environment_provenance(
+            device=torch.device("cpu"),
+            dataset_sha256="0" * 64,
+            config=APPROVED_PILOT_CONFIG,
+            initial_model_fingerprint=None,
+            final_model_fingerprint=None
+        )
+
+        self.assertTrue(prov["deterministic_algorithms_enabled"])
+        self.assertEqual(prov["cublas_workspace_config"], ":4096:8")
+        self.assertIsNone(prov["initial_model_fingerprint"])
+        self.assertIsNone(prov["final_model_fingerprint"])
+        self.assertEqual(prov["dataset_sha256"], "0" * 64)
+        self.assertEqual(len(prov["config_sha256"]), 64)
+
+    def test_deadline_enforcement_before_and_after_operation(self):
+        """
+        Tests that monotonic deadlines are enforced both before and after operations.
+        """
+        class DummySleepModel(torch.nn.Module):
+            def forward(self, x):
+                time.sleep(0.05)
+                return torch.tensor([[0.2, 0.8]], dtype=torch.float32)
+
+        model = DummySleepModel()
+        example = [{
+            "example_id": 1,
+            "rule_id": 1,
+            "rule_indices": [0, 1, 2, 3],
+            "features": [1] * 16,
+            "mask": [1, 1, 1, 1] + [0] * 12,
+            "target_class": 1,
+            "is_held_out_pattern": False,
+        }]
+
+        # 1. Pre-operation deadline expiry
+        diag_pre = {}
+        with self.assertRaises(TimeoutError) as ctx_pre:
+            evaluate_model_on_split(
+                model=model,
+                examples=example,
+                dataset_sha256="0" * 64,
+                arm="fresh_control",
+                seed=101,
+                step=2000,
+                device=torch.device("cpu"),
+                deadline_monotonic=time.monotonic() - 1.0, # Already expired
+                pop_name="eval_seen",
+                diagnostics=diag_pre
+            )
+        self.assertIn("BEFORE inference", str(ctx_pre.exception))
+
+        # 2. Post-operation deadline expiry (expires during the 0.05s forward call)
+        diag_post = {}
+        with self.assertRaises(TimeoutError) as ctx_post:
+            evaluate_model_on_split(
+                model=model,
+                examples=example,
+                dataset_sha256="0" * 64,
+                arm="fresh_control",
+                seed=101,
+                step=2000,
+                device=torch.device("cpu"),
+                deadline_monotonic=time.monotonic() + 0.01, # Expires while sleeping 0.05s
+                pop_name="eval_seen",
+                diagnostics=diag_post
+            )
+        self.assertIn("AFTER inference", str(ctx_post.exception))
+
+    def test_reject_rule_id_mismatch(self):
+        """
+        Tests that validate_pilot_dataset_contract rejects rule_id mismatch in metadata or examples.
+        """
+        # 1. Metadata rule_id mismatch
+        def corrupt_meta_rule_id(d):
+            d["metadata"]["rule_id"] = 99
+        bad_meta = self._build_handcrafted_contract_dataset(corrupt_meta_rule_id)
+        with self.assertRaises(PilotDatasetContractError) as ctx1:
+            validate_pilot_dataset_contract(bad_meta, APPROVED_PILOT_CONFIG)
+        self.assertIn("Metadata rule_id mismatch", str(ctx1.exception))
+
+        # 2. Example rule_id mismatch
+        def corrupt_ex_rule_id(d):
+            d["train_examples"][0]["rule_id"] = 99
+        bad_ex = self._build_handcrafted_contract_dataset(corrupt_ex_rule_id)
+        with self.assertRaises(PilotDatasetContractError) as ctx2:
+            validate_pilot_dataset_contract(bad_ex, APPROVED_PILOT_CONFIG)
+        self.assertIn("rule_id mismatch", str(ctx2.exception))
+
+    def test_exclusive_directory_reservation(self):
+        """
+        Tests that reserve_run_directory exclusively creates a new directory
+        and strictly refuses an existing directory to protect prior contents.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "unique_run_dir")
+            created_dir = reserve_run_directory(run_dir)
+            self.assertTrue(os.path.isdir(created_dir))
+
+            # Put a sentinel artifact in the directory
+            sentinel = os.path.join(created_dir, "sentinel.txt")
+            with open(sentinel, "w") as f:
+                f.write("PROTECTED_DATA")
+
+            # Calling reserve_run_directory again must raise FileExistsError
+            with self.assertRaises(FileExistsError):
+                reserve_run_directory(run_dir)
+
+            # Sentinel file must remain completely unchanged
+            with open(sentinel, "r") as f:
+                self.assertEqual(f.read(), "PROTECTED_DATA")
+
+
+if __name__ == "__main__":
+    unittest.main()

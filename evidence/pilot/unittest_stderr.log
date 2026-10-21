@@ -1,0 +1,36 @@
+test_accidental_dataset_overwrite_prevention (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_accidental_dataset_overwrite_prevention) ... ok
+test_active_pattern_partition_integrity (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_active_pattern_partition_integrity) ... ok
+test_deadline_enforcement_before_and_after_operation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_deadline_enforcement_before_and_after_operation)
+Tests that monotonic deadlines are enforced both before and after operations. ... ok
+test_duplicate_example_ids_rejected (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_duplicate_example_ids_rejected) ... ok
+test_effective_provenance_reflects_applied_settings (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_effective_provenance_reflects_applied_settings)
+Tests that environment provenance captures applied determinism settings ... ok
+test_exact_sign_flip_resolution_n6 (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_exact_sign_flip_resolution_n6) ... ok
+test_example_record_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_example_record_validation) ... ok
+test_exclusive_directory_reservation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_exclusive_directory_reservation)
+Tests that reserve_run_directory exclusively creates a new directory ... ok
+test_explicit_pilot_contract_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_explicit_pilot_contract_validation) ... ok
+test_gate_g_lc_boundary_cases (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_gate_g_lc_boundary_cases) ... ok
+test_invalid_rules_and_malformed_patterns (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_invalid_rules_and_malformed_patterns) ... ok
+test_measurement_guards (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_measurement_guards) ... ok
+test_non_neural_probe_cloning_independence (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_non_neural_probe_cloning_independence) ... ok
+test_parity_and_mask_interpretation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_parity_and_mask_interpretation) ... ok
+test_partial_evaluation_records_survive_simulated_exception (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_partial_evaluation_records_survive_simulated_exception)
+Tests that per-example evaluation records are accumulated immediately, ... ok
+test_recomputed_hash_on_invalid_contract_fails (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_recomputed_hash_on_invalid_contract_fails)
+Proves that a correctly re-hashed dataset fails if its semantic content violates the contract. ... ok
+test_reject_rule_id_mismatch (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_reject_rule_id_mismatch)
+Tests that validate_pilot_dataset_contract rejects rule_id mismatch in metadata or examples. ... ok
+test_reject_unapproved_specification_before_model_construction (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_reject_unapproved_specification_before_model_construction)
+Tests that an unapproved specification is rejected before any model construction. ... [Pilot] Halting with nonzero exit due to SpecificationApprovalError: Run specification approval status is 'PROPOSED_PENDING_APPROVAL', not 'APPROVED'. Execution is forbidden before formal approval. Aborting prior to model construction.
+ok
+test_shared_failure_handling_preserves_existing_sentinel (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_shared_failure_handling_preserves_existing_sentinel)
+Tests the actual runner entry point run_learnability_pilot when destination already exists. ... [Pilot] ERROR: Run destination file already exists: /tmp/tmpu3ugi3i3/existing_run.json
+[Pilot] Refusing run to protect existing artifacts. Supply a unique destination.
+ok
+test_strict_transfer_rule_set_matching (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_strict_transfer_rule_set_matching) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 2.871s
+
+OK

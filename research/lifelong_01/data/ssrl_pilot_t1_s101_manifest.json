@@ -1,0 +1,51 @@
+{
+  "byte_hash_verified": true,
+  "config": {
+    "active_k": 4,
+    "arm": "fresh_control",
+    "batch_size": 16,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "directive": "LIFELONG-01-PILOT",
+    "eps": 1e-08,
+    "eval_seen_size": 192,
+    "eval_unseen_size": 64,
+    "gate_approval_status": "PROPOSED_PENDING_APPROVAL",
+    "hidden_dim": 64,
+    "input_dim": 32,
+    "input_dim_features": 16,
+    "learning_rate": 0.001,
+    "output_dim": 2,
+    "phase": "learnability_pilot",
+    "proposed_gate_threshold": 0.9,
+    "rule_id": 1,
+    "rule_indices": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "seed": 101,
+    "step_budget": 2000,
+    "study_id": "SSRL-01",
+    "train_pool_size": 384,
+    "wall_clock_ceiling_eval_seconds": 60.0,
+    "wall_clock_ceiling_training_seconds": 120.0,
+    "weight_decay": 0.0
+  },
+  "contract_verified": true,
+  "dataset_relative_path": "research/lifelong_01/data/ssrl_pilot_t1_s101.json",
+  "dataset_sha256": "00a21efad1dc07b826198d99b0b702aedddad57b6226f99301afbf16327fd0b7",
+  "disjointness_verified": true,
+  "generator_source_path": "research/lifelong_01/ssrl_generator.py",
+  "generator_source_sha256": "575562994cd00d07ee2245d8db1fddce46aa23b171740af5447d7ba01f7d563f",
+  "generation_run_directory": "/kaggle/working/ssrl_data_gen_QvsnluuI",
+  "generation_exit_code": 0,
+  "populations": {
+    "eval_seen_size": 192,
+    "eval_unseen_size": 64,
+    "train_pool_size": 384
+  }
+}
