@@ -37,6 +37,7 @@ import torch
 from research.lifelong_01.ssrl_types import (
     SSRLMeasurement,
     SSRLExampleRecord,
+    SSRLDeltaMeasurement,
     compute_accuracy_measurement
 )
 from research.lifelong_01.ssrl_generator import (
@@ -52,6 +53,10 @@ from research.lifelong_01.ssrl_evaluator import (
     evaluate_gate_g_lc,
     compute_seed_transfer_score,
     compute_exact_sign_flip_test,
+    compute_forgetting_measurement,
+    compute_transfer_delta_measurement,
+    compute_forgetting_from_records,
+    compute_transfer_from_records,
     atomic_write_json
 )
 from research.lifelong_01.ssrl_runner import clone_post_history_checkpoint_for_probe
@@ -580,6 +585,201 @@ class TestSSRLModelFree(unittest.TestCase):
             # Sentinel file must remain completely unchanged
             with open(sentinel, "r") as f:
                 self.assertEqual(f.read(), "PROTECTED_DATA")
+
+    def test_two_rule_disjoint_masks_and_coordinates(self):
+        """
+        Tests that Rule A [0,1,2,3] and Rule B [4,5,6,7] produce valid, mutually
+        disjoint binary masks with zero coordinate overlap.
+        """
+        rule_a = (0, 1, 2, 3)
+        rule_b = (4, 5, 6, 7)
+        self.assertEqual(len(set(rule_a).intersection(set(rule_b))), 0)
+
+        mask_a = rule_to_mask(rule_a, d=16)
+        mask_b = rule_to_mask(rule_b, d=16)
+
+        self.assertEqual(sum(mask_a), 4)
+        self.assertEqual(sum(mask_b), 4)
+        # Dot product of disjoint binary masks must be 0
+        dot_prod = sum(a * b for a, b in zip(mask_a, mask_b))
+        self.assertEqual(dot_prod, 0)
+
+    def test_forgetting_measurement_calculation(self):
+        """
+        Tests that compute_forgetting_measurement computes accuracy after A minus
+        accuracy after B with explicit numerator/denominator tracking.
+        """
+        m_after_a = SSRLMeasurement(
+            name="task_a_seen_post_a",
+            numerator=192,
+            denominator=192,
+            input_set="task_a_seen",
+            mode="eval_no_dropout"
+        )
+        m_after_b = SSRLMeasurement(
+            name="task_a_seen_post_b",
+            numerator=144,
+            denominator=192,
+            input_set="task_a_seen",
+            mode="eval_no_dropout"
+        )
+
+        forgetting = compute_forgetting_measurement(m_after_a, m_after_b)
+        self.assertAlmostEqual(forgetting["forgetting_rate"], 1.0 - 0.75)
+        self.assertAlmostEqual(forgetting["forgetting_pct"], 25.0)
+        self.assertEqual(forgetting["input_set"], "task_a_seen")
+
+        # Mismatched input sets must raise ValueError
+        m_diff_set = SSRLMeasurement(
+            name="task_b_seen",
+            numerator=100,
+            denominator=192,
+            input_set="task_b_seen",
+            mode="eval_no_dropout"
+        )
+        with self.assertRaises(ValueError):
+            compute_forgetting_measurement(m_after_a, m_diff_set)
+
+    def test_transfer_delta_measurement_calculation(self):
+        """
+        Tests that compute_transfer_delta_measurement computes sequential minus
+        fresh-B accuracy with explicit denominators.
+        """
+        m_seq_b = SSRLMeasurement(
+            name="task_b_seq",
+            numerator=180,
+            denominator=192,
+            input_set="task_b_seen",
+            mode="eval_no_dropout"
+        )
+        m_fresh_b = SSRLMeasurement(
+            name="task_b_fresh",
+            numerator=150,
+            denominator=192,
+            input_set="task_b_seen",
+            mode="eval_no_dropout"
+        )
+
+        transfer = compute_transfer_delta_measurement(m_seq_b, m_fresh_b)
+        expected_rate = (180 - 150) / 192.0
+        self.assertAlmostEqual(transfer["transfer_delta_rate"], expected_rate)
+        self.assertAlmostEqual(transfer["transfer_delta_pct"], expected_rate * 100.0)
+
+    def test_delta_measurement_dataclass_validation(self):
+        """
+        Tests that SSRLDeltaMeasurement dataclass validates arithmetic consistency
+        between baseline, target, and declared delta.
+        """
+        base = SSRLMeasurement("base", 100, 200, "set1", "eval")
+        target = SSRLMeasurement("target", 150, 200, "set1", "eval")
+
+        # Correct delta
+        delta = SSRLDeltaMeasurement(
+            name="transfer_delta",
+            baseline=base,
+            target=target,
+            delta_rate=0.25,
+            delta_pct=25.0,
+            input_set="set1",
+            mode="eval"
+        )
+        self.assertEqual(delta.delta_rate, 0.25)
+
+        # Mismatched delta_rate must raise ValueError
+        with self.assertRaises(ValueError):
+            SSRLDeltaMeasurement(
+                name="bad_delta",
+                baseline=base,
+                target=target,
+                delta_rate=0.50, # Inconsistent!
+                delta_pct=50.0,
+                input_set="set1",
+                mode="eval"
+            )
+
+    def test_forgetting_from_records_semantic_alignment_and_negative_drop(self):
+        """
+        Tests compute_forgetting_from_records requiring identical evaluation population,
+        rejecting mismatched rule_id, and accepting negative forgetting (performance recovery).
+        """
+        sha = "a" * 64
+        rec_a = [
+            SSRLExampleRecord(0, 1, "post_a", 101, 2000, sha, [1]*16, [1]*4+[0]*12, 1, 1, True, False),
+            SSRLExampleRecord(1, 1, "post_a", 101, 2000, sha, [-1]*16, [1]*4+[0]*12, 0, 0, True, False),
+        ]
+        # Performance improves at post_b (both correct, same as post_a -> 0 drop)
+        rec_b_same = [
+            SSRLExampleRecord(0, 1, "post_b", 101, 2500, sha, [1]*16, [1]*4+[0]*12, 1, 1, True, False),
+            SSRLExampleRecord(1, 1, "post_b", 101, 2500, sha, [-1]*16, [1]*4+[0]*12, 0, 0, True, False),
+        ]
+        res = compute_forgetting_from_records(rec_a, rec_b_same)
+        self.assertEqual(res["forgetting_rate"], 0.0)
+
+        # Performance drops at post_b -> positive forgetting
+        rec_b_drop = [
+            SSRLExampleRecord(0, 1, "post_b", 101, 2500, sha, [1]*16, [1]*4+[0]*12, 1, 0, False, False),
+            SSRLExampleRecord(1, 1, "post_b", 101, 2500, sha, [-1]*16, [1]*4+[0]*12, 0, 0, True, False),
+        ]
+        res_drop = compute_forgetting_from_records(rec_a, rec_b_drop)
+        self.assertAlmostEqual(res_drop["forgetting_rate"], 0.5)
+        self.assertAlmostEqual(res_drop["forgetting_pct"], 50.0)
+
+        # Performance was low at post_a and improves at post_b -> negative forgetting (recovery)
+        rec_a_low = [
+            SSRLExampleRecord(0, 1, "post_a", 101, 2000, sha, [1]*16, [1]*4+[0]*12, 1, 0, False, False),
+            SSRLExampleRecord(1, 1, "post_a", 101, 2000, sha, [-1]*16, [1]*4+[0]*12, 0, 0, True, False),
+        ]
+        res_recov = compute_forgetting_from_records(rec_a_low, rec_b_same)
+        self.assertAlmostEqual(res_recov["forgetting_rate"], -0.5) # Valid negative delta
+        self.assertAlmostEqual(res_recov["forgetting_pct"], -50.0)
+
+        # Mismatched rule_id must be rejected
+        rec_b_wrong_rule = [
+            SSRLExampleRecord(0, 2, "post_b", 101, 2500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 1, 1, True, False),
+            SSRLExampleRecord(1, 2, "post_b", 101, 2500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            compute_forgetting_from_records(rec_a, rec_b_wrong_rule)
+        self.assertIn("Rule ID mismatch", str(ctx.exception))
+
+    def test_transfer_from_records_semantic_alignment_and_negative_transfer(self):
+        """
+        Tests compute_transfer_from_records asserting semantic alignment,
+        accepting negative transfer (interference), and rejecting mismatched target classes.
+        """
+        sha = "b" * 64
+        rec_seq = [
+            SSRLExampleRecord(0, 2, "seq", 101, 2500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 1, 1, True, False),
+            SSRLExampleRecord(1, 2, "seq", 101, 2500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        # Fresh control does worse -> positive transfer
+        rec_fresh_low = [
+            SSRLExampleRecord(0, 2, "fresh", 101, 500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 1, 0, False, False),
+            SSRLExampleRecord(1, 2, "fresh", 101, 500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        res_pos = compute_transfer_from_records(rec_seq, rec_fresh_low)
+        self.assertAlmostEqual(res_pos["transfer_delta_rate"], 0.5)
+
+        # Fresh control does better -> negative transfer (interference)
+        rec_seq_low = [
+            SSRLExampleRecord(0, 2, "seq", 101, 2500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 1, 0, False, False),
+            SSRLExampleRecord(1, 2, "seq", 101, 2500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        rec_fresh_high = [
+            SSRLExampleRecord(0, 2, "fresh", 101, 500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 1, 1, True, False),
+            SSRLExampleRecord(1, 2, "fresh", 101, 500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        res_neg = compute_transfer_from_records(rec_seq_low, rec_fresh_high)
+        self.assertAlmostEqual(res_neg["transfer_delta_rate"], -0.5) # Valid negative transfer
+
+        # Mismatched target class must be rejected
+        rec_mismatch_target = [
+            SSRLExampleRecord(0, 2, "fresh", 101, 500, sha, [1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False), # Changed target
+            SSRLExampleRecord(1, 2, "fresh", 101, 500, sha, [-1]*16, [0]*4+[1]*4+[0]*8, 0, 0, True, False),
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            compute_transfer_from_records(rec_seq, rec_mismatch_target)
+        self.assertIn("Target class mismatch", str(ctx.exception))
 
 
 if __name__ == "__main__":

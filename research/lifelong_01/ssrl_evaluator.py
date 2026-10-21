@@ -15,7 +15,12 @@ import os
 import tempfile
 import math
 from typing import List, Dict, Any, Tuple
-from research.lifelong_01.ssrl_types import SSRLExampleRecord, SSRLMeasurement, compute_accuracy_measurement
+from research.lifelong_01.ssrl_types import (
+    SSRLExampleRecord,
+    SSRLMeasurement,
+    SSRLDeltaMeasurement,
+    compute_accuracy_measurement
+)
 
 
 def evaluate_records_by_pattern_split(
@@ -45,6 +50,253 @@ def evaluate_records_by_pattern_split(
     return {
         "seen_patterns": m_seen,
         "unseen_patterns": m_unseen,
+    }
+
+
+def compute_forgetting_from_records(
+    records_after_a: List[SSRLExampleRecord],
+    records_after_b: List[SSRLExampleRecord],
+    name: str = "task_a_forgetting"
+) -> Dict[str, Any]:
+    """
+    Computes Task A forgetting strictly from aligned per-example evaluation records.
+    Enforces identical evaluation population and semantics:
+    - Non-empty records
+    - Equal length
+    - Matched example_id per position
+    - Matched rule_id (must evaluate the same rule)
+    - Matched dataset_sha256
+    - Matched target_class
+    - Matched is_held_out_pattern status
+
+    Forgetting formula: accuracy(after A) - accuracy(after B).
+    Sign convention: positive indicates accuracy drop (forgetting);
+                     zero indicates identical accuracy;
+                     negative indicates performance recovery (negative forgetting / backward transfer).
+    Units: percentage_points (for pct) and rate difference (for rate).
+    """
+    if len(records_after_a) == 0:
+        raise ValueError(f"Cannot compute forgetting for '{name}': records_after_a is empty")
+    if len(records_after_a) != len(records_after_b):
+        raise ValueError(
+            f"Population size mismatch for '{name}': after_a={len(records_after_a)}, after_b={len(records_after_b)}"
+        )
+
+    for i, (ra, rb) in enumerate(zip(records_after_a, records_after_b)):
+        if ra.example_id != rb.example_id:
+            raise ValueError(
+                f"Population misalignment at index {i} in '{name}': "
+                f"example_id {ra.example_id} vs {rb.example_id}"
+            )
+        if ra.rule_id != rb.rule_id:
+            raise ValueError(
+                f"Rule ID mismatch at index {i} in '{name}': "
+                f"rule_id {ra.rule_id} vs {rb.rule_id}. Forgetting must evaluate the identical rule."
+            )
+        if ra.dataset_sha256 != rb.dataset_sha256:
+            raise ValueError(
+                f"Dataset hash mismatch at index {i} in '{name}': "
+                f"dataset_sha256 {ra.dataset_sha256} vs {rb.dataset_sha256}"
+            )
+        if ra.target_class != rb.target_class:
+            raise ValueError(
+                f"Target class mismatch at index {i} in '{name}': "
+                f"target {ra.target_class} vs {rb.target_class}"
+            )
+        if ra.is_held_out_pattern != rb.is_held_out_pattern:
+            raise ValueError(
+                f"Pattern partition mismatch at index {i} in '{name}': "
+                f"held_out {ra.is_held_out_pattern} vs {rb.is_held_out_pattern}"
+            )
+
+    m_after_a = compute_accuracy_measurement(
+        name=f"{name}_after_a",
+        records=records_after_a,
+        input_set=records_after_a[0].dataset_sha256,
+        mode=records_after_a[0].arm
+    )
+    m_after_b = compute_accuracy_measurement(
+        name=f"{name}_after_b",
+        records=records_after_b,
+        input_set=records_after_b[0].dataset_sha256,
+        mode=records_after_b[0].arm
+    )
+
+    forgetting_rate = m_after_a.rate - m_after_b.rate
+    forgetting_pct = forgetting_rate * 100.0
+
+    return {
+        "name": name,
+        "rule_id": records_after_a[0].rule_id,
+        "acc_after_a": m_after_a.to_dict(),
+        "acc_after_b": m_after_b.to_dict(),
+        "forgetting_rate": forgetting_rate,
+        "forgetting_pct": forgetting_pct,
+        "units": "percentage_points",
+        "sign_convention": "acc_after_a_minus_acc_after_b (positive = drop / forgetting, negative = recovery)",
+        "input_set": records_after_a[0].dataset_sha256,
+        "population_size": len(records_after_a),
+    }
+
+
+def compute_transfer_from_records(
+    records_seq_b: List[SSRLExampleRecord],
+    records_fresh_b: List[SSRLExampleRecord],
+    name: str = "task_b_forward_transfer"
+) -> Dict[str, Any]:
+    """
+    Computes Task B forward transfer delta strictly from aligned per-example evaluation records.
+    Enforces identical evaluation population and semantics:
+    - Non-empty records
+    - Equal length
+    - Matched example_id per position
+    - Matched rule_id (must evaluate the same target task)
+    - Matched dataset_sha256
+    - Matched target_class
+    - Matched is_held_out_pattern status
+
+    Transfer formula: accuracy(sequential B) - accuracy(fresh B).
+    Sign convention: positive indicates positive forward transfer (sequential outperforms fresh);
+                     zero indicates no difference;
+                     negative indicates negative transfer / interference (fresh outperforms sequential).
+    Units: percentage_points (for pct) and rate difference (for rate).
+    """
+    if len(records_seq_b) == 0:
+        raise ValueError(f"Cannot compute transfer for '{name}': records_seq_b is empty")
+    if len(records_seq_b) != len(records_fresh_b):
+        raise ValueError(
+            f"Population size mismatch for '{name}': seq_b={len(records_seq_b)}, fresh_b={len(records_fresh_b)}"
+        )
+
+    for i, (rs, rf) in enumerate(zip(records_seq_b, records_fresh_b)):
+        if rs.example_id != rf.example_id:
+            raise ValueError(
+                f"Population misalignment at index {i} in '{name}': "
+                f"example_id {rs.example_id} vs {rf.example_id}"
+            )
+        if rs.rule_id != rf.rule_id:
+            raise ValueError(
+                f"Rule ID mismatch at index {i} in '{name}': "
+                f"rule_id {rs.rule_id} vs {rf.rule_id}. Transfer delta must compare the identical target rule."
+            )
+        if rs.dataset_sha256 != rf.dataset_sha256:
+            raise ValueError(
+                f"Dataset hash mismatch at index {i} in '{name}': "
+                f"dataset_sha256 {rs.dataset_sha256} vs {rf.dataset_sha256}"
+            )
+        if rs.target_class != rf.target_class:
+            raise ValueError(
+                f"Target class mismatch at index {i} in '{name}': "
+                f"target {rs.target_class} vs {rf.target_class}"
+            )
+        if rs.is_held_out_pattern != rf.is_held_out_pattern:
+            raise ValueError(
+                f"Pattern partition mismatch at index {i} in '{name}': "
+                f"held_out {rs.is_held_out_pattern} vs {rf.is_held_out_pattern}"
+            )
+
+    m_seq = compute_accuracy_measurement(
+        name=f"{name}_seq",
+        records=records_seq_b,
+        input_set=records_seq_b[0].dataset_sha256,
+        mode=records_seq_b[0].arm
+    )
+    m_fresh = compute_accuracy_measurement(
+        name=f"{name}_fresh",
+        records=records_fresh_b,
+        input_set=records_fresh_b[0].dataset_sha256,
+        mode=records_fresh_b[0].arm
+    )
+
+    transfer_rate = m_seq.rate - m_fresh.rate
+    transfer_pct = transfer_rate * 100.0
+
+    return {
+        "name": name,
+        "rule_id": records_seq_b[0].rule_id,
+        "sequential_acc": m_seq.to_dict(),
+        "fresh_acc": m_fresh.to_dict(),
+        "transfer_delta_rate": transfer_rate,
+        "transfer_delta_pct": transfer_pct,
+        "units": "percentage_points",
+        "sign_convention": "acc_seq_minus_acc_fresh (positive = forward transfer, negative = interference)",
+        "input_set": records_seq_b[0].dataset_sha256,
+        "population_size": len(records_seq_b),
+    }
+
+
+def compute_forgetting_measurement(
+    acc_after_a: SSRLMeasurement,
+    acc_after_b: SSRLMeasurement,
+    name: str = "task_a_forgetting"
+) -> Dict[str, Any]:
+    """
+    Computes Task A forgetting strictly as: accuracy after A minus accuracy after B.
+    Positive value indicates forgetting (accuracy drop); zero indicates complete retention;
+    negative value indicates backward positive transfer / recovery.
+    Enforces AGENTS.md Section 1.1 / Section 1.2 by carrying underlying numerator/denominators.
+    """
+    if acc_after_a.input_set != acc_after_b.input_set:
+        raise ValueError(
+            f"Cannot compute forgetting across mismatched input sets: "
+            f"'{acc_after_a.input_set}' vs '{acc_after_b.input_set}'"
+        )
+    if acc_after_a.denominator != acc_after_b.denominator:
+        raise ValueError(
+            f"Cannot compute forgetting across mismatched denominators: "
+            f"{acc_after_a.denominator} vs {acc_after_b.denominator}"
+        )
+
+    forgetting_rate = acc_after_a.rate - acc_after_b.rate
+    forgetting_pct = forgetting_rate * 100.0
+
+    return {
+        "name": name,
+        "acc_after_a": acc_after_a.to_dict(),
+        "acc_after_b": acc_after_b.to_dict(),
+        "forgetting_rate": forgetting_rate,
+        "forgetting_pct": forgetting_pct,
+        "units": "percentage_points",
+        "sign_convention": "acc_after_a_minus_acc_after_b (positive = drop / forgetting, negative = recovery)",
+        "input_set": acc_after_a.input_set,
+        "mode": acc_after_b.mode,
+    }
+
+
+def compute_transfer_delta_measurement(
+    seq_b_acc: SSRLMeasurement,
+    fresh_b_acc: SSRLMeasurement,
+    name: str = "task_b_forward_transfer"
+) -> Dict[str, Any]:
+    """
+    Computes Task B forward transfer delta strictly as: sequential accuracy minus fresh-B accuracy.
+    Positive value indicates forward transfer; negative value indicates negative transfer.
+    Carries explicit underlying numerator/denominator pairs from both comparators.
+    """
+    if seq_b_acc.input_set != fresh_b_acc.input_set:
+        raise ValueError(
+            f"Cannot compute transfer across mismatched input sets: "
+            f"'{seq_b_acc.input_set}' vs '{fresh_b_acc.input_set}'"
+        )
+    if seq_b_acc.denominator != fresh_b_acc.denominator:
+        raise ValueError(
+            f"Cannot compute transfer across mismatched denominators: "
+            f"{seq_b_acc.denominator} vs {fresh_b_acc.denominator}"
+        )
+
+    transfer_rate = seq_b_acc.rate - fresh_b_acc.rate
+    transfer_pct = transfer_rate * 100.0
+
+    return {
+        "name": name,
+        "sequential_acc": seq_b_acc.to_dict(),
+        "fresh_acc": fresh_b_acc.to_dict(),
+        "transfer_delta_rate": transfer_rate,
+        "transfer_delta_pct": transfer_pct,
+        "units": "percentage_points",
+        "sign_convention": "seq_b_minus_fresh_b (positive = forward transfer, negative = interference)",
+        "input_set": seq_b_acc.input_set,
+        "mode": seq_b_acc.mode,
     }
 
 

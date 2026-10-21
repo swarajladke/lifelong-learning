@@ -59,6 +59,54 @@ class SSRLMeasurement:
 
 
 @dataclass(frozen=True)
+class SSRLDeltaMeasurement:
+    """
+    Decomposed signed difference measurement between two evaluated states
+    (e.g., Forgetting: post_A - post_B, or Transfer Delta: seq - fresh).
+    Direct implementation of AGENTS.md Section 1.1 / Section 13 Rule 2.
+
+    Explicitly models signed values: negative forgetting (performance recovery)
+    and negative transfer (interference) are mathematically valid and preserved.
+    """
+    name: str
+    baseline: SSRLMeasurement
+    target: SSRLMeasurement
+    delta_rate: float
+    delta_pct: float
+    input_set: str
+    mode: str
+    units: str = "percentage_points"
+    sign_convention: str = "target_minus_baseline"
+    rule_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        expected_delta = self.target.rate - self.baseline.rate
+        if not math.isclose(self.delta_rate, expected_delta, abs_tol=1e-7):
+            raise ValueError(
+                f"{self.name}: delta_rate mismatch: expected {expected_delta}, got {self.delta_rate}"
+            )
+        expected_pct = expected_delta * 100.0
+        if not math.isclose(self.delta_pct, expected_pct, abs_tol=1e-5):
+            raise ValueError(
+                f"{self.name}: delta_pct mismatch: expected {expected_pct}, got {self.delta_pct}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "baseline": self.baseline.to_dict(),
+            "target": self.target.to_dict(),
+            "delta_rate": self.delta_rate,
+            "delta_pct": self.delta_pct,
+            "units": self.units,
+            "sign_convention": self.sign_convention,
+            "rule_id": self.rule_id,
+            "input_set": self.input_set,
+            "mode": self.mode,
+        }
+
+
+@dataclass(frozen=True)
 class SSRLExampleRecord:
     """
     Per-example evaluation outcome serializing raw boolean accuracy.

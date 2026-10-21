@@ -238,6 +238,7 @@ def validate_pilot_dataset_contract(data: Dict[str, Any], approved_config: Dict[
 
 def generate_pilot_dataset_dict(
     rule_indices: Tuple[int, ...] = (0, 1, 2, 3),
+    rule_id: int = 1,
     seed: int = 101,
     d: int = 16,
     k: int = 4,
@@ -293,7 +294,7 @@ def generate_pilot_dataset_dict(
 
             train_examples.append({
                 "example_id": global_ex_id,
-                "rule_id": 1,
+                "rule_id": rule_id,
                 "rule_indices": list(rule_indices),
                 "features": feat,
                 "mask": mask,
@@ -314,7 +315,7 @@ def generate_pilot_dataset_dict(
 
             eval_seen_examples.append({
                 "example_id": global_ex_id,
-                "rule_id": 1,
+                "rule_id": rule_id,
                 "rule_indices": list(rule_indices),
                 "features": feat,
                 "mask": mask,
@@ -340,7 +341,7 @@ def generate_pilot_dataset_dict(
 
             eval_unseen_examples.append({
                 "example_id": global_ex_id,
-                "rule_id": 1,
+                "rule_id": rule_id,
                 "rule_indices": list(rule_indices),
                 "features": feat,
                 "mask": mask,
@@ -353,7 +354,7 @@ def generate_pilot_dataset_dict(
         "metadata": {
             "study_id": "SSRL-01",
             "phase": "learnability_pilot",
-            "rule_id": 1,
+            "rule_id": rule_id,
             "rule_indices": list(rule_indices),
             "seed": seed,
             "d": d,
