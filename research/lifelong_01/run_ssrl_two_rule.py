@@ -394,8 +394,18 @@ def run_two_rule_study(
             "freeze_after_a": {"steps": 2000, "samples": 32000},
         }
 
-        # 6. Optional Counterfactual Mask Probe Diagnostic
+        # 6. Optional Reproduction Verification against Original Run (Evaluated before probe)
+        if original_results_path and os.path.exists(original_results_path):
+            repro_report = verify_aligned_reproduction({
+                "eval_records": {k: [r.to_dict() for r in v] for k, v in eval_records_all.items()},
+                "config": config,
+                "metrics": metrics,
+            }, original_results_path)
+            diagnostics["reproduction_verification"] = repro_report
+
+        # 7. Optional Counterfactual Mask Probe Diagnostic (Bounded by explicit 60.0s ceiling)
         if probe_dataset_path and os.path.exists(probe_dataset_path):
+            t_start_probe = time.monotonic()
             with open(probe_dataset_path, "r", encoding="utf-8") as pf:
                 probe_json = json.load(pf)
             probe_results = {}
@@ -404,16 +414,12 @@ def run_two_rule_study(
                 probe_model = SSRLInstructionMLP(32, 64, 2).to(device)
                 probe_model.load_state_dict(reloaded_sd)
                 probe_results[c_name] = evaluate_counterfactual_probe(probe_model, probe_json["probe_examples"], device)
+            elapsed_probe = time.monotonic() - t_start_probe
+            ceiling_probe = float(config.get("wall_clock_ceiling_eval_seconds", 60.0))
+            if elapsed_probe > ceiling_probe:
+                raise DeadlineExceededError(f"Probe evaluation time {elapsed_probe:.2f}s exceeded ceiling {ceiling_probe:.1f}s")
             diagnostics["counterfactual_probe"] = probe_results
-
-        # 7. Optional Reproduction Verification against Original Run
-        if original_results_path and os.path.exists(original_results_path):
-            repro_report = verify_aligned_reproduction({
-                "eval_records": {k: [r.to_dict() for r in v] for k, v in eval_records_all.items()},
-                "config": config,
-                "metrics": metrics,
-            }, original_results_path)
-            diagnostics["reproduction_verification"] = repro_report
+            diagnostics["elapsed_probe_seconds"] = elapsed_probe
 
         # Serialize complete output
         serialized_records = {k: [r.to_dict() for r in v] for k, v in eval_records_all.items()}

@@ -25,8 +25,11 @@ Specification:
 """
 
 from __future__ import annotations
+import os
 import json
 import random
+import hashlib
+import argparse
 from typing import Dict, List, Tuple, Any, Optional
 import torch
 import torch.nn as nn
@@ -456,3 +459,68 @@ def evaluate_counterfactual_probe(
         "strata_metrics": strata_metrics,
         "pair_records": pair_records,
     }
+
+
+def compute_bytes_sha256(path: str) -> str:
+    """Computes SHA-256 byte hash of file on disk."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate and validate SSRL-02 Counterfactual Mask Probe")
+    parser.add_argument("--dataset_a", required=True, help="Path to Rule A dataset JSON")
+    parser.add_argument("--dataset_b", required=True, help="Path to Rule B dataset JSON")
+    parser.add_argument("--output", required=True, help="Destination path for probe dataset JSON")
+    parser.add_argument("--manifest", required=True, help="Destination path for probe manifest JSON")
+    parser.add_argument("--seed", type=int, default=PROBE_SEED_DEFAULT, help="RNG seed for probe generation")
+    args = parser.parse_args()
+
+    if os.path.exists(args.output):
+        raise FileExistsError(f"Probe output file already exists: {args.output}")
+    if os.path.exists(args.manifest):
+        raise FileExistsError(f"Probe manifest file already exists: {args.manifest}")
+
+    with open(args.dataset_a, "r", encoding="utf-8") as fa:
+        da = json.load(fa)
+    with open(args.dataset_b, "r", encoding="utf-8") as fb:
+        db = json.load(fb)
+
+    print(f"[Probe Generator] Sampling 128 counterfactual pairs with seed {args.seed}...")
+    probe_dataset = generate_counterfactual_probe_dataset(da, db, seed=args.seed)
+
+    # Atomic write of probe dataset
+    tmp_out = args.output + ".tmp"
+    with open(tmp_out, "w", encoding="utf-8") as f:
+        json.dump(probe_dataset, f, indent=2)
+    os.replace(tmp_out, args.output)
+
+    sha256_hash = compute_bytes_sha256(args.output)
+    byte_size = os.path.getsize(args.output)
+    print(f"[Probe Generator] Dataset written to: {args.output}")
+    print(f"[Probe Generator] Byte size: {byte_size} bytes")
+    print(f"[Probe Generator] Canonical SHA-256: {sha256_hash}")
+
+    manifest = {
+        "study_id": "SSRL-02",
+        "phase": "counterfactual_mask_diagnostic",
+        "dataset_filename": os.path.basename(args.output),
+        "canonical_sha256": sha256_hash,
+        "sample_size": PROBE_SAMPLE_SIZE,
+        "seed": args.seed,
+        "strata_quotas": STRATA_QUOTAS,
+        "orientation_quotas": {"target_a_1_b_0": 64, "target_a_0_b_1": 64},
+        "rule_a_dataset_sha256": da.get("metadata", {}).get("dataset_sha256"),
+        "rule_b_dataset_sha256": db.get("metadata", {}).get("dataset_sha256"),
+    }
+
+    tmp_man = args.manifest + ".tmp"
+    with open(tmp_man, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    os.replace(tmp_man, args.manifest)
+
+    print(f"[Probe Generator] Manifest written to: {args.manifest}")
+    print(f"[Probe Generator] SUCCESS: Contract validated and artifacts pinned.")
