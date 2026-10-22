@@ -1092,19 +1092,26 @@ class TestSSRLModelFree(unittest.TestCase):
 
         probe = generate_counterfactual_probe_dataset(da, db, seed=3030)
 
-        # 1. Corrupt one label to match opposing (violates parity difference)
-        bad_probe = copy.deepcopy(probe)
-        bad_probe["probe_examples"][0]["target_class_b"] = bad_probe["probe_examples"][0]["target_class_a"]
-        with self.assertRaises(ValueError) as ctx:
-            validate_counterfactual_probe_contract(bad_probe, da, db)
-        self.assertIn("violates opposing parity constraint", str(ctx.exception))
+        # 1. Corrupt one active feature so parities match (violates opposing parity constraint)
+        bad_parity = copy.deepcopy(probe)
+        bad_parity["probe_examples"][0]["features"][4] *= -1
+        with self.assertRaises(ValueError) as ctx1:
+            validate_counterfactual_probe_contract(bad_parity, da, db)
+        self.assertIn("violates opposing parity constraint", str(ctx1.exception))
 
-        # 2. Corrupt strata count (e.g. modify stratum string)
+        # 2. Corrupt one label to not match recomputed parity
+        bad_label = copy.deepcopy(probe)
+        bad_label["probe_examples"][0]["target_class_b"] = 1 - bad_label["probe_examples"][0]["target_class_b"]
+        with self.assertRaises(ValueError) as ctx2:
+            validate_counterfactual_probe_contract(bad_label, da, db)
+        self.assertIn("label fields do not match recomputed parity", str(ctx2.exception))
+
+        # 3. Corrupt strata count (e.g. modify stratum string)
         bad_strata = copy.deepcopy(probe)
         bad_strata["probe_examples"][0]["stratum"] = "unseen_unseen"
-        with self.assertRaises(ValueError) as ctx2:
+        with self.assertRaises(ValueError) as ctx3:
             validate_counterfactual_probe_contract(bad_strata, da, db)
-        self.assertTrue("Stratum" in str(ctx2.exception))
+        self.assertTrue("Stratum" in str(ctx3.exception))
 
     def test_counterfactual_probe_category_arithmetic(self):
         """
