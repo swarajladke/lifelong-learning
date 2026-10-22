@@ -285,6 +285,13 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Scaffolding Certified:** Pinned 128-vector probe generator and contract validator, 4-way descriptive outcome evaluation categories, RNG-invariant checkpoint capture, narrow publisher allowlist, and aligned bit-for-bit reproduction checks against `ssrl_02_d3100b00`.
    - **Compute Status:** Zero neural compute or dataset generation executed.
 
+9. **SSRL-02 Replay Execution, Checkpoint Capture & Counterfactual Probe Evaluation (2026-10-22):**
+   - **Run ID:** `ssrl_02_replay_eff8aa50`
+   - **Executing Commit:** `43e0530df1008e22c3a34925c6cf8113659eccc3`
+   - **Reproduction Verification:** 3264 / 3264 predictions match bit-for-bit against `ssrl_02_d3100b00` (zero discrepancies).
+   - **Checkpoints Captured:** 5 size-bounded checkpoints (`checkpoint_t0_init.pt`, `checkpoint_t1_post_a.pt`, `checkpoint_t2_seq_ab.pt`, `checkpoint_t2_fresh_b.pt`, `checkpoint_t2_freeze_a.pt`), all < 100 KB limit.
+   - **Counterfactual Probe Findings:** 128 vectors evaluated under both masks with opposing targets. Proved single-rule models ($t_1$ and $t_2\text{-fresh}$) ignore context mask (switch rate $\le 2.3\%$). Sequential arm ($t_2\text{-seq}$) exhibits emerging mask responsiveness (switch rate 36.7% overall, 50.0% in Stratum 1: seen/seen with 42.2% joint correctness). Full evidence in `evidence/runs/ssrl_02_replay_eff8aa50/`.
+
 ---
 
 ## 9. Collaboration Preferences
@@ -310,7 +317,7 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 - [x] Ingest and verify SSRL-02 remote run artifacts (`evidence/runs/ssrl_02_d3100b00/`).
 - [x] Document empirical findings on catastrophic forgetting and transfer deltas.
 - [x] Complete scaffolding & verify 41 model-free tests on Kaggle for counterfactual probe & checkpoint capture (commit `3c98d26`, run `ssrl_verify_cd8fb219`).
-- [ ] Generate and pin counterfactual probe dataset `ssrl_probe_counterfactual_128.json` (Awaiting authorization).
-- [ ] Execute authorized replay with checkpoint capture and counterfactual evaluation.
+- [x] Generate and pin counterfactual probe dataset `ssrl_probe_counterfactual_128.json` (SHA-256 `1c07d50fed772cfcff86e3bf30cc74a95cdc24d190ec767aa15365671fe06319`).
+- [x] Execute authorized replay with checkpoint capture and counterfactual evaluation (`ssrl_02_replay_eff8aa50`).
 
 

@@ -1,0 +1,20 @@
+{
+  "study_id": "SSRL-02",
+  "phase": "counterfactual_mask_diagnostic",
+  "dataset_filename": "ssrl_probe_counterfactual_128.json",
+  "canonical_sha256": "1c07d50fed772cfcff86e3bf30cc74a95cdc24d190ec767aa15365671fe06319",
+  "sample_size": 128,
+  "seed": 3030,
+  "strata_quotas": {
+    "seen_seen": 64,
+    "seen_unseen": 32,
+    "unseen_seen": 32,
+    "unseen_unseen": 0
+  },
+  "orientation_quotas": {
+    "target_a_1_b_0": 64,
+    "target_a_0_b_1": 64
+  },
+  "rule_a_dataset_sha256": null,
+  "rule_b_dataset_sha256": null
+}

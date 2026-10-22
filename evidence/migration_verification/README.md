@@ -150,6 +150,38 @@ OK
 - **Verification Status:** **REPORTED ONLY** (Researcher-Reported Terminal Stream).
   *Coverage:* Certifies counterfactual mask probe generator, contract validator (opposing parity, 128 unique vectors, 64/32/32 strata quotas, training pool exclusion), size-bounded checkpoint capture invariants, narrow publisher allowlist, and aligned reproduction verification. Zero neural training executed.
 
+---
+
+## 8. SSRL-02 Checkpoint-Capture Replay & Counterfactual Mask Diagnostic (2026-10-22)
+
+- **Target Commit:** `43e0530df1008e22c3a34925c6cf8113659eccc3`
+- **Execution Mode:** Exact-protocol replay with size-bounded checkpoint capture and counterfactual mask probe.
+- **Run ID:** `ssrl_02_replay_eff8aa50`
+- **Local Artifact Directory:** `evidence/runs/ssrl_02_replay_eff8aa50/`
+- **Pinned Datasets:**
+  - Rule A: `research/lifelong_01/data/ssrl_pilot_t1_s101.json` (SHA-256 `00a21efad1...`)
+  - Rule B: `research/lifelong_01/data/ssrl_pilot_t2_s101.json` (SHA-256 `27e813e7...`)
+  - Counterfactual Probe: `research/lifelong_01/data/ssrl_probe_counterfactual_128.json` (SHA-256 `1c07d50fed772cfcff86e3bf30cc74a95cdc24d190ec767aa15365671fe06319`)
+- **Reproduction Verification Against `ssrl_02_d3100b00`:**
+  - Evaluated: 3,264 individual predictions across all 25 splits and transfer evaluation steps.
+  - Outcome: **100.0% Bit-for-Bit Reproduction Match (0 discrepancies)**.
+- **Captured Checkpoints:**
+  - `checkpoint_t0_init.pt`: 28,342 bytes (Tensor FP: `acb9143e56b062e5...`)
+  - `checkpoint_t1_post_a.pt`: 28,362 bytes (Tensor FP: `9ce6ab7020b1e7c2...`)
+  - `checkpoint_t2_freeze_a.pt`: 28,446 bytes (Tensor FP: `9ce6ab7020b1e7c2...`, identical to $t_1$, confirming zero parameter updates)
+  - `checkpoint_t2_fresh_b.pt`: 28,372 bytes (Tensor FP: `10bb1d489358ff15...`)
+  - `checkpoint_t2_seq_ab.pt`: 28,362 bytes (Tensor FP: `cf185302d328dc4b...`)
+  - All checkpoints within the 100 KB limit.
+- **Counterfactual Probe Findings ($n=128$, opposing parity):**
+  - **At $t_1$ (Post Rule A):** Switch rate 3/128 (2.3%), joint correctness 2/128 (1.6%). 85.2% (109/128) unchanged matching Rule A target. The single-rule network almost entirely ignores the context mask.
+  - **At $t_2\text{-fresh}$ (Fresh Rule B):** Switch rate 0/128 (0.0%), joint correctness 0/128 (0.0%). 75.0% (96/128) unchanged matching Rule B target. Completely ignores Mask A.
+  - **At $t_2\text{-seq}$ (Sequential AB):** Switch rate rises to 47/128 (36.7%) overall; joint correctness reaches 30/128 (23.4%).
+  - **Stratum Breakdown at $t_2\text{-seq}$:**
+    - *Stratum 1 (Seen A / Seen B, $n=64$):* Switch rate 32/64 (50.0%), Joint Correctness 27/64 (42.2%). Demonstrates emerging mask conditioning on dual-seen active features.
+    - *Stratum 2 (Seen A / Unseen B, $n=32$):* Switch rate 8/32 (25.0%), Joint Correctness 0/32 (0.0%). Rule A prediction dominates (24/32 unchanged matching A).
+    - *Stratum 3 (Unseen A / Seen B, $n=32$):* Switch rate 7/32 (21.9%), Joint Correctness 3/32 (9.4%). Rule B prediction dominates (24/32 unchanged matching B).
+
+
 
 
 
