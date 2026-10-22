@@ -252,10 +252,15 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Canonical SHA-256 Byte Hash:** `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4`
    - **Evidence Bundle:** `/kaggle/working/ssrl_gen_t2_r3nnlpez/ssrl_t2_generated_bundle.zip`
    - **Reported Outcome:** All 640 examples verified (384 train / 192 seen-eval / 64 held-out-eval), parity labels, masks, and pattern disjointness passed.
-5. **SSRL-02 Runner Implementation & Scaffolding (2026-10-22):**
-   - Implemented bounded two-rule runner (`research/lifelong_01/run_ssrl_two_rule.py`, 401 lines, under 600-line ceiling) covering `seq_ab`, `fresh_b`, `freeze_after_a` arms, boundary Adam rebuild ($m=0, v=0, \text{step}=0$), shared minibatch schedule, and step 0/100/250/500 evaluations.
-   - Expanded model-free test suite to 31 unit and regression tests in `research/lifelong_01/test_ssrl_model_free.py`.
-   - Neural execution remains blocked. Ready for 31-test remote verification on Kaggle and Rule B dataset placement into repository.
+5. **SSRL-02 Runner Implementation & Scaffolding Verification on Kaggle (2026-10-22) [Reported]:**
+   - **Tested Commit:** `e4aef5042950a4329b465407f710edac72e452f2`
+   - **Environment:** Remote Kaggle Notebook (CPU-only, no accelerator).
+   - **Run Directory:** `/kaggle/working/ssrl_verify_72280459`
+   - **Evidence Archive:** `/kaggle/working/ssrl_verify_72280459/ssrl_verification_evidence.zip`
+   - **Reported Outcome:** 31 / 31 unit and regression tests passed in 5.461s with exit code 0 (researcher-reported terminal stream).
+   - **Status & Caveat:** Reported only. The raw archive has not yet been downloaded to the local workstation or inspected independently. Transcript preserved in `evidence/migration_verification/README.md`.
+   - **Scaffolding Scope:** Covers `seq_ab`, `fresh_b`, `freeze_after_a` arms, boundary Adam rebuild ($m=0, v=0, \text{step}=0$), shared minibatch schedule, and step 0/100/250/500 evaluations (`research/lifelong_01/run_ssrl_two_rule.py`, 401 lines, under 600-line limit).
+   - **Neural Compute Status:** Zero neural compute executed. Specification approval guard verified. Ready for Rule B dataset placement into repository.
 
 ---
 
