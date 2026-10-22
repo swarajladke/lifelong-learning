@@ -918,8 +918,8 @@ class TestSSRLModelFree(unittest.TestCase):
         self.assertEqual(transfer_step0["units"], "percentage_points")
         self.assertEqual(transfer_step0["population_size"], 10)
         self.assertEqual(transfer_step0["rule_id"], 2)
-        # 10/10 vs 5/10 -> delta = +50.0 percentage points
-        self.assertAlmostEqual(transfer_step0["transfer_delta_pct"], 50.0)
+        # 10/10 (100%) vs 6/10 (60%) -> delta = +40.0 percentage points
+        self.assertAlmostEqual(transfer_step0["transfer_delta_pct"], 40.0)
 
 
 if __name__ == "__main__":
