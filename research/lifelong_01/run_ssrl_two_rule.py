@@ -105,6 +105,17 @@ def reserve_run_directory(run_dir: str) -> str:
     return abs_dir
 
 
+def make_json_serializable(val: Any) -> Any:
+    """Recursively converts dataclasses and objects with .to_dict() to JSON-compatible types."""
+    if hasattr(val, "to_dict") and callable(val.to_dict):
+        return make_json_serializable(val.to_dict())
+    if isinstance(val, dict):
+        return {str(k): make_json_serializable(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [make_json_serializable(v) for v in val]
+    return val
+
+
 def build_minibatch_schedule(
     train_pool: List[Dict[str, Any]],
     step_budget: int,
@@ -334,16 +345,16 @@ def run_two_rule_study(
         # 5. Compute Decomposed Metrics
         metrics: Dict[str, Any] = {}
         # Standing Control Arm: Freeze-After-A accuracy on Rule A at t2 (AGENTS.md Rule 13.1)
-        metrics["acc_t2_frozen_rule_a_seen"] = compute_accuracy_measurement("frozen_rule_a_seen", eval_records_all["t2_frozen_rule_a_seen"], expected_sha_a)
-        metrics["acc_t2_frozen_rule_a_unseen"] = compute_accuracy_measurement("frozen_rule_a_unseen", eval_records_all["t2_frozen_rule_a_unseen"], expected_sha_a)
+        metrics["acc_t2_frozen_rule_a_seen"] = compute_accuracy_measurement("frozen_rule_a_seen", eval_records_all["t2_frozen_rule_a_seen"], expected_sha_a).to_dict()
+        metrics["acc_t2_frozen_rule_a_unseen"] = compute_accuracy_measurement("frozen_rule_a_unseen", eval_records_all["t2_frozen_rule_a_unseen"], expected_sha_a).to_dict()
 
         # Baseline accuracies at t0, t1, t2
-        metrics["acc_t0_rule_a_seen"] = compute_accuracy_measurement("rule_a_t0_seen", eval_records_all["t0_rule_a_seen"], expected_sha_a)
-        metrics["acc_t0_rule_b_seen"] = compute_accuracy_measurement("rule_b_t0_seen", eval_records_all["t0_rule_b_seen"], expected_sha_b)
-        metrics["acc_t1_seq_rule_a_seen"] = m_t1_a_seen
-        metrics["acc_t1_seq_rule_a_unseen"] = compute_accuracy_measurement("rule_a_t1_unseen", eval_records_all["t1_seq_rule_a_unseen"], expected_sha_a)
-        metrics["acc_t2_seq_rule_a_seen"] = compute_accuracy_measurement("rule_a_t2_seen", eval_records_all["t2_seq_rule_a_seen"], expected_sha_a)
-        metrics["acc_t2_seq_rule_a_unseen"] = compute_accuracy_measurement("rule_a_t2_unseen", eval_records_all["t2_seq_rule_a_unseen"], expected_sha_a)
+        metrics["acc_t0_rule_a_seen"] = compute_accuracy_measurement("rule_a_t0_seen", eval_records_all["t0_rule_a_seen"], expected_sha_a).to_dict()
+        metrics["acc_t0_rule_b_seen"] = compute_accuracy_measurement("rule_b_t0_seen", eval_records_all["t0_rule_b_seen"], expected_sha_b).to_dict()
+        metrics["acc_t1_seq_rule_a_seen"] = m_t1_a_seen.to_dict()
+        metrics["acc_t1_seq_rule_a_unseen"] = compute_accuracy_measurement("rule_a_t1_unseen", eval_records_all["t1_seq_rule_a_unseen"], expected_sha_a).to_dict()
+        metrics["acc_t2_seq_rule_a_seen"] = compute_accuracy_measurement("rule_a_t2_seen", eval_records_all["t2_seq_rule_a_seen"], expected_sha_a).to_dict()
+        metrics["acc_t2_seq_rule_a_unseen"] = compute_accuracy_measurement("rule_a_t2_unseen", eval_records_all["t2_seq_rule_a_unseen"], expected_sha_a).to_dict()
 
         # Forgetting on Rule A (seen and unseen)
         metrics["forgetting_rule_a_seen"] = compute_forgetting_from_records(eval_records_all["t1_seq_rule_a_seen"], eval_records_all["t2_seq_rule_a_seen"], "forgetting_rule_a_seen")
@@ -375,8 +386,9 @@ def run_two_rule_study(
             "metrics": metrics,
             "eval_records": serialized_records,
         }
-        atomic_write_json(final_output, destination, refuse_overwrite=True)
-        return final_output
+        serializable_output = make_json_serializable(final_output)
+        atomic_write_json(serializable_output, destination, refuse_overwrite=True)
+        return serializable_output
 
     except Exception as e:
         diagnostics["status"] = "FAILED"
@@ -384,7 +396,8 @@ def run_two_rule_study(
         diagnostics["error_message"] = str(e)
         failure_path = os.path.join(abs_run_dir, "failure_diagnostics.json")
         try:
-            atomic_write_json(diagnostics, failure_path, refuse_overwrite=False)
+            serializable_diag = make_json_serializable(diagnostics)
+            atomic_write_json(serializable_diag, failure_path, refuse_overwrite=False)
         except Exception:
             pass
         raise

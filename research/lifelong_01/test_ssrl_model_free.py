@@ -36,6 +36,7 @@ Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 32. Publish results artifact size ceiling: enforces 10 MB limit before Git staging.
 33. Publish results forbidden files guard: rejects .pt, .ckpt, and credential files.
 34. Publish results branch guard: strictly rejects 'main' branch targets.
+35. Two-rule JSON serialization integrity: proves make_json_serializable converts dataclasses and measurements.
 """
 
 from __future__ import annotations
@@ -89,6 +90,7 @@ from research.lifelong_01.run_ssrl_two_rule import (
     build_minibatch_schedule,
     verify_run_specification_approval as verify_two_rule_approval,
     run_two_rule_study,
+    make_json_serializable,
 )
 from research.lifelong_01.publish_results import (
     calculate_and_verify_run_size,
@@ -980,6 +982,23 @@ class TestSSRLModelFree(unittest.TestCase):
                     target_branch="main",
                 )
             self.assertIn("strictly forbidden", str(ctx.exception))
+
+    def test_two_rule_json_serialization_integrity(self):
+        """
+        Tests that make_json_serializable converts nested SSRLMeasurement,
+        SSRLExampleRecord, and dataclass objects into types that json.dumps accepts.
+        """
+        m = SSRLMeasurement(name="test_m", numerator=10, denominator=10, input_set="0"*64, mode="eval")
+        rec = SSRLExampleRecord(0, 1, "arm", 101, 10, "0"*64, [1]*16, [1]*4+[0]*12, 1, 1, True, False)
+        payload = {
+            "measurement": m,
+            "records": [rec],
+            "nested": {"inner_m": m}
+        }
+        serialized = make_json_serializable(payload)
+        dumped = json.dumps(serialized)
+        self.assertIsInstance(dumped, str)
+        self.assertIn('"numerator": 10', dumped)
 
 
 if __name__ == "__main__":
