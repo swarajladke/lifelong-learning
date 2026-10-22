@@ -134,6 +134,14 @@ from research.lifelong_01.run_ssrl_joint_reference import (
     run_joint_reference_study,
     evaluate_population_records,
 )
+from research.lifelong_01.run_ssrl_replay_baseline import (
+    PROPOSED_REPLAY_CONFIG,
+    select_replay_memory,
+    build_replay_schedule,
+    load_and_verify_t1_model,
+    verify_replay_specification_approval,
+    run_replay_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -1403,12 +1411,121 @@ class TestSSRLModelFree(unittest.TestCase):
             validate_counterfactual_probe_contract(malformed_labels, da, db)
         self.assertIn("label fields do not match recomputed parity", str(ctx2.exception))
 
+    def test_replay_buffer_selection_and_exclusion(self):
+        """
+        Tests that select_replay_memory deterministically selects 8 lowest-ID class-0
+        and 8 lowest-ID class-1 Rule A training examples, enforces M=16, and verifies
+        disjointness from all evaluation and probe populations.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        with open(dataset_a_path, "r", encoding="utf-8") as f:
+            da = json.load(f)
+        probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+        with open(probe_path, "r", encoding="utf-8") as f:
+            dp = json.load(f)
+
+        buffer_examples = select_replay_memory(da["train_examples"], buffer_size=16)
+        self.assertEqual(len(buffer_examples), 16)
+
+        c0 = [ex for ex in buffer_examples if ex["target_class"] == 0]
+        c1 = [ex for ex in buffer_examples if ex["target_class"] == 1]
+        self.assertEqual(len(c0), 8)
+        self.assertEqual(len(c1), 8)
+
+        # Assert exact lowest IDs
+        self.assertEqual([ex["example_id"] for ex in c0], [0, 1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual([ex["example_id"] for ex in c1], [96, 97, 98, 99, 100, 101, 102, 103])
+
+        # Assert zero overlap with eval_seen, eval_unseen, and probe
+        sel_ids = set(ex["example_id"] for ex in buffer_examples)
+        eval_seen_ids = set(ex["example_id"] for ex in da["eval_seen_examples"])
+        eval_unseen_ids = set(ex["example_id"] for ex in da["eval_unseen_examples"])
+        self.assertEqual(len(sel_ids.intersection(eval_seen_ids)), 0)
+        self.assertEqual(len(sel_ids.intersection(eval_unseen_ids)), 0)
+
+        sel_features = set(tuple(ex["features"]) for ex in buffer_examples)
+        probe_features = set(tuple(ex["features"]) for ex in dp["probe_examples"])
+        self.assertEqual(len(sel_features.intersection(probe_features)), 0)
+
+        # Assert buffer size validation
+        with self.assertRaises(ValueError):
+            select_replay_memory(da["train_examples"], buffer_size=15)
+
+    def test_replay_schedule_order_and_counts(self):
+        """
+        Tests that build_replay_schedule produces exactly 625 batches:
+        500 B batches and 125 Replay A batches, preserving B ordering in 4:1 cycles.
+        """
+        dummy_b = [[{"example_id": i * 16 + j} for j in range(16)] for i in range(500)]
+        dummy_a = [{"example_id": 9000 + j} for j in range(16)]
+
+        sched = build_replay_schedule(dummy_b, dummy_a, ratio_b=4, ratio_a=1)
+        self.assertEqual(len(sched), 625)
+
+        b_count = sum(1 for tag, _, _ in sched if tag == "rule_b")
+        a_count = sum(1 for tag, _, _ in sched if tag == "replay_a")
+        self.assertEqual(b_count, 500)
+        self.assertEqual(a_count, 125)
+
+        # Check cyclic pattern: 4 B then 1 A
+        for cycle_idx in range(125):
+            base = cycle_idx * 5
+            for k in range(4):
+                tag, rid, batch = sched[base + k]
+                self.assertEqual(tag, "rule_b")
+                self.assertEqual(rid, 2)
+                self.assertEqual(batch, dummy_b[cycle_idx * 4 + k])
+            tag, rid, batch = sched[base + 4]
+            self.assertEqual(tag, "replay_a")
+            self.assertEqual(rid, 1)
+            self.assertEqual(batch, dummy_a)
+
+    def test_replay_specification_approval_guard(self):
+        """
+        Tests that verify_replay_specification_approval blocks unapproved execution.
+        """
+        unapproved = copy.deepcopy(PROPOSED_REPLAY_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_replay_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        # Must not raise
+        verify_replay_specification_approval(approved)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
     CPU integration test suite for SSRL components requiring model construction (SSRLInstructionMLP)
     or neural forward pass execution. Distinct from model-free verification.
     """
+
+    def test_replay_checkpoint_identity_and_rejection(self):
+        """
+        Tests that load_and_verify_t1_model validates expected post-A checkpoint fingerprint
+        and file hash, rejecting mismatched weights or corrupted files.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            ckpt_path = os.path.join(tmpdir, "checkpoint_t1_post_a.pt")
+            torch.save(model.state_dict(), ckpt_path)
+
+            with open(ckpt_path, "rb") as f:
+                valid_sha = hashlib.sha256(f.read()).hexdigest()
+            valid_fp = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+
+            # Matching loads cleanly
+            loaded = load_and_verify_t1_model(ckpt_path, valid_fp, valid_sha, device=torch.device("cpu"))
+            self.assertIsInstance(loaded, SSRLInstructionMLP)
+
+            # Wrong fingerprint raises CheckpointVerificationError
+            with self.assertRaises(CheckpointVerificationError):
+                load_and_verify_t1_model(ckpt_path, "0"*64, valid_sha, device=torch.device("cpu"))
+
+            # Wrong file sha raises CheckpointVerificationError
+            with self.assertRaises(CheckpointVerificationError):
+                load_and_verify_t1_model(ckpt_path, valid_fp, "0"*64, device=torch.device("cpu"))
 
     def test_joint_reference_initialization_checkpoint_validation(self):
         """
@@ -1688,6 +1805,139 @@ class TestSSRLCPUIntegration(unittest.TestCase):
         self.assertEqual(fp_before, fp_after)
         for p in model.parameters():
             self.assertIsNone(p.grad)
+
+    def test_replay_failure_persistence_on_error(self):
+        """
+        Tests that run_replay_study catches execution failures, persists
+        failure diagnostics with actual status ('FAILED'), work counters, and
+        enforces non-overwrite behavior on failure records and run directories.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_failed_replay")
+            dest_json = os.path.join(tmpdir, "results.json")
+            t1_ckpt = os.path.join(tmpdir, "checkpoint_t1_post_a.pt")
+
+            test_model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            torch.save(test_model.state_dict(), t1_ckpt)
+            with open(t1_ckpt, "rb") as f:
+                sha_ckpt = hashlib.sha256(f.read()).hexdigest()
+            fp_ckpt = compute_tensor_fingerprint_from_state_dict(test_model.state_dict())
+
+            cfg = copy.deepcopy(PROPOSED_REPLAY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["expected_t1_fingerprint"] = fp_ckpt
+            cfg["expected_t1_file_sha256"] = sha_ckpt
+            cfg["step_budget_b"] = 4
+            cfg["step_budget_replay_a"] = 1
+            cfg["step_budget_total"] = 5
+            cfg["replay_cycles"] = 1
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            call_count = [0]
+            original_forward = SSRLInstructionMLP.forward
+            def faulty_forward(self_model, x):
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    raise RuntimeError("Injected simulated fault during replay training")
+                return original_forward(self_model, x)
+
+            with unittest.mock.patch.object(SSRLInstructionMLP, "forward", faulty_forward):
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_replay_study(
+                        dataset_a_path=dataset_a_path,
+                        sha256_a=sha_a,
+                        dataset_b_path=dataset_b_path,
+                        sha256_b=sha_b,
+                        probe_dataset_path=probe_path,
+                        sha256_probe=sha_probe,
+                        destination=dest_json,
+                        run_dir=run_dir,
+                        t1_checkpoint_path=t1_ckpt,
+                        config=cfg
+                    )
+                self.assertIn("Injected simulated fault", str(ctx.exception))
+
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as df:
+                fdiag = json.load(df)
+
+            self.assertEqual(fdiag["status"], "FAILED")
+            self.assertEqual(fdiag["error_type"], "RuntimeError")
+            self.assertIn("Injected simulated fault", fdiag["error_message"])
+            self.assertGreaterEqual(fdiag["exposures"]["total_optimizer_steps"], 1)
+            self.assertGreaterEqual(fdiag["exposures"]["total_presentations"], 16)
+
+            with self.assertRaises(FileExistsError):
+                atomic_write_json(fdiag, diag_file, refuse_overwrite=True)
+
+    def test_replay_tiny_e2e_integration(self):
+        """
+        Tests the real training-to-evaluation path of run_replay_study with a bounded
+        tiny fixture budget (4 B steps + 1 Replay A step = 5 steps).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_replay")
+            dest_json = os.path.join(tmpdir, "results.json")
+            t1_ckpt = os.path.join(tmpdir, "checkpoint_t1_post_a.pt")
+
+            test_model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            torch.save(test_model.state_dict(), t1_ckpt)
+            with open(t1_ckpt, "rb") as f:
+                sha_ckpt = hashlib.sha256(f.read()).hexdigest()
+            fp_ckpt = compute_tensor_fingerprint_from_state_dict(test_model.state_dict())
+
+            cfg = copy.deepcopy(PROPOSED_REPLAY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["expected_t1_fingerprint"] = fp_ckpt
+            cfg["expected_t1_file_sha256"] = sha_ckpt
+            cfg["step_budget_b"] = 4
+            cfg["step_budget_replay_a"] = 1
+            cfg["step_budget_total"] = 5
+            cfg["replay_cycles"] = 1
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            res = run_replay_study(
+                dataset_a_path=dataset_a_path,
+                sha256_a=sha_a,
+                dataset_b_path=dataset_b_path,
+                sha256_b=sha_b,
+                probe_dataset_path=probe_path,
+                sha256_probe=sha_probe,
+                destination=dest_json,
+                run_dir=run_dir,
+                t1_checkpoint_path=t1_ckpt,
+                config=cfg
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            self.assertEqual(res["diagnostics"]["exposures"]["total_optimizer_steps"], 5)
+            self.assertEqual(res["diagnostics"]["exposures"]["rule_b_presentations"], 64)
+            self.assertEqual(res["diagnostics"]["exposures"]["replay_a_presentations"], 16)
+            self.assertEqual(res["diagnostics"]["exposures"]["total_presentations"], 80)
+            self.assertTrue(os.path.isfile(dest_json))
+            final_ckpt = os.path.join(run_dir, "checkpoint_replay_step625_final.pt")
+            self.assertTrue(os.path.isfile(final_ckpt))
+            self.assertIn("acc_rule_a_seen", res["metrics"])
+            self.assertIn("counterfactual_probe", res["diagnostics"])
 
 
 if __name__ == "__main__":

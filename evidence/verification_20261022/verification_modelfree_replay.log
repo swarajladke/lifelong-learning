@@ -1,0 +1,96 @@
+test_accidental_dataset_overwrite_prevention (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_accidental_dataset_overwrite_prevention) ... ok
+test_active_pattern_partition_integrity (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_active_pattern_partition_integrity) ... ok
+test_checkpoint_capture_invariants (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_checkpoint_capture_invariants)
+Tests that capture_and_verify_checkpoint preserves RNG states, ... ok
+test_counterfactual_probe_category_arithmetic (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_counterfactual_probe_category_arithmetic)
+Tests that evaluate_counterfactual_probe partitions outcomes into ... ok
+test_counterfactual_probe_malformed_opposing_parity_rejected (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_counterfactual_probe_malformed_opposing_parity_rejected)
+Tests that validate_counterfactual_probe_contract strictly rejects probe fixtures ... ok
+test_counterfactual_probe_quotas_and_pairing (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_counterfactual_probe_quotas_and_pairing)
+Tests that generate_counterfactual_probe_dataset satisfies the exact quota ... ok
+test_counterfactual_probe_unrelaxed_quota_guard (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_counterfactual_probe_unrelaxed_quota_guard)
+Tests that validate_counterfactual_probe_contract raises ValueError ... ok
+test_deadline_enforcement_before_and_after_operation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_deadline_enforcement_before_and_after_operation)
+Tests that monotonic deadlines are enforced both before and after operations. ... ok
+test_delta_measurement_dataclass_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_delta_measurement_dataclass_validation)
+Tests that SSRLDeltaMeasurement dataclass validates arithmetic consistency ... ok
+test_duplicate_example_ids_rejected (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_duplicate_example_ids_rejected) ... ok
+test_effective_provenance_reflects_applied_settings (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_effective_provenance_reflects_applied_settings)
+Tests that environment provenance captures applied determinism settings ... ok
+test_exact_sign_flip_resolution_n6 (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_exact_sign_flip_resolution_n6) ... ok
+test_example_record_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_example_record_validation) ... ok
+test_exclusive_directory_reservation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_exclusive_directory_reservation)
+Tests that reserve_run_directory exclusively creates a new directory ... ok
+test_explicit_pilot_contract_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_explicit_pilot_contract_validation) ... ok
+test_forgetting_from_records_semantic_alignment_and_negative_drop (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_forgetting_from_records_semantic_alignment_and_negative_drop)
+Tests compute_forgetting_from_records requiring identical evaluation population, ... ok
+test_forgetting_measurement_calculation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_forgetting_measurement_calculation)
+Tests that compute_forgetting_measurement computes accuracy after A minus ... ok
+test_gate_g_lc_boundary_cases (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_gate_g_lc_boundary_cases) ... ok
+test_invalid_rules_and_malformed_patterns (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_invalid_rules_and_malformed_patterns) ... ok
+test_joint_reference_approval_guard_and_directory_reservation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_joint_reference_approval_guard_and_directory_reservation)
+Tests that joint reference runner enforces approval guards, directory reservation, ... ok
+test_joint_reference_dataset_validation_enforces_rule_contracts (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_joint_reference_dataset_validation_enforces_rule_contracts)
+Tests that load_and_verify_dataset enforces Rule A (rule_id 1, indices [0,1,2,3]) ... ok
+test_joint_reference_schedule_interleaving_and_order (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_joint_reference_schedule_interleaving_and_order)
+Tests that interleave_minibatch_schedules produces exactly 2,500 batches ... ok
+test_measurement_guards (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_measurement_guards) ... ok
+test_narrow_checkpoint_publisher_allowlist (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_narrow_checkpoint_publisher_allowlist)
+Tests that publisher allows only approved checkpoint filenames under 100 KB, ... ok
+test_non_neural_probe_cloning_independence (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_non_neural_probe_cloning_independence) ... ok
+test_parity_and_mask_interpretation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_parity_and_mask_interpretation) ... ok
+test_partial_evaluation_records_survive_simulated_exception (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_partial_evaluation_records_survive_simulated_exception)
+Tests that per-example evaluation records are accumulated immediately, ... ok
+test_publish_branch_guard_rejects_main (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_publish_branch_guard_rejects_main)
+Tests that publish_run_artifacts asserts target_branch != 'main', ... ok
+test_publish_forbidden_checkpoints_rejected (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_publish_forbidden_checkpoints_rejected)
+Tests that verify_no_forbidden_files rejects unapproved .pt, .ckpt, and credential files. ... ok
+test_publish_size_ceiling_enforced (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_publish_size_ceiling_enforced)
+Tests that calculate_and_verify_run_size raises ValueError ... ok
+test_recomputed_hash_on_invalid_contract_fails (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_recomputed_hash_on_invalid_contract_fails)
+Proves that a correctly re-hashed dataset fails if its semantic content violates the contract. ... ok
+test_reject_rule_id_mismatch (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_reject_rule_id_mismatch)
+Tests that validate_pilot_dataset_contract rejects rule_id mismatch in metadata or examples. ... ok
+test_reject_unapproved_specification_before_model_construction (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_reject_unapproved_specification_before_model_construction)
+Tests that an unapproved specification is rejected before any model construction. ... [Pilot] Halting with nonzero exit due to SpecificationApprovalError: Run specification approval status is 'PROPOSED_PENDING_APPROVAL', not 'APPROVED'. Execution is forbidden before formal approval. Aborting prior to model construction.
+ok
+test_replay_buffer_selection_and_exclusion (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_replay_buffer_selection_and_exclusion)
+Tests that select_replay_memory deterministically selects 8 lowest-ID class-0 ... ok
+test_replay_schedule_order_and_counts (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_replay_schedule_order_and_counts)
+Tests that build_replay_schedule produces exactly 625 batches: ... ok
+test_replay_specification_approval_guard (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_replay_specification_approval_guard)
+Tests that verify_replay_specification_approval blocks unapproved execution. ... ok
+test_reproduction_divergence_detector (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_reproduction_divergence_detector)
+Tests that verify_aligned_reproduction raises ReproductionDivergenceError ... ok
+test_shared_failure_handling_preserves_existing_sentinel (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_shared_failure_handling_preserves_existing_sentinel)
+Tests the actual runner entry point run_learnability_pilot when destination already exists. ... [Pilot] ERROR: Run destination file already exists: C:\Users\Vicky\AppData\Local\Temp\tmpyb9ggf9v\existing_run.json
+[Pilot] Refusing run to protect existing artifacts. Supply a unique destination.
+ok
+test_strict_transfer_rule_set_matching (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_strict_transfer_rule_set_matching) ... ok
+test_transfer_delta_measurement_calculation (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_transfer_delta_measurement_calculation)
+Tests that compute_transfer_delta_measurement computes sequential minus ... ok
+test_transfer_from_records_semantic_alignment_and_negative_transfer (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_transfer_from_records_semantic_alignment_and_negative_transfer)
+Tests compute_transfer_from_records asserting semantic alignment, ... ok
+test_two_rule_checkpoint_independence_double (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_checkpoint_independence_double)
+Tests that post-A checkpoint cloning produces an independent dictionary double, ... ok
+test_two_rule_disjoint_masks_and_coordinates (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_disjoint_masks_and_coordinates)
+Tests that Rule A [0,1,2,3] and Rule B [4,5,6,7] produce valid, mutually ... ok
+test_two_rule_failure_diagnostics_persistence (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_failure_diagnostics_persistence)
+Tests that run_two_rule_study writes failure_diagnostics.json to the run ... ok
+test_two_rule_json_serialization_integrity (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_json_serialization_integrity)
+Tests that make_json_serializable converts nested SSRLMeasurement, ... ok
+test_two_rule_minibatch_schedule_pairing (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_minibatch_schedule_pairing)
+Tests that build_minibatch_schedule produces identical batch sequences ... ok
+test_two_rule_specification_approval_guard (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_specification_approval_guard)
+Tests that verify_two_rule_approval rejects unapproved configuration ... ok
+test_two_rule_step0_transfer_delta_semantics (research.lifelong_01.test_ssrl_model_free.TestSSRLModelFree.test_two_rule_step0_transfer_delta_semantics)
+Tests that zero-shot transfer delta at step 0 compares sequential model at t1 ... ok
+
+----------------------------------------------------------------------
+Ran 48 tests in 1.274s
+
+OK
+[Pilot] Verifying dataset at C:\Users\Vicky\AppData\Local\Temp\tmpbacs9cqv\dataset.json against SHA-256 and Pilot Contract...
+[Pilot] Dataset and Contract verified. Hash: 59fd0217725975cd...
+[Pilot] Verifying specification approval status...
+[Pilot] Diagnostics persisted to C:\Users\Vicky\AppData\Local\Temp\tmpbacs9cqv\run_attempt\results.json prior to error exit.

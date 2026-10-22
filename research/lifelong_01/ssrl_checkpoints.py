@@ -31,6 +31,8 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_joint_step1000.pt",
     "checkpoint_joint_step2000.pt",
     "checkpoint_joint_step2500_final.pt",
+    # SSRL-04 replay baseline checkpoints
+    "checkpoint_replay_step625_final.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint

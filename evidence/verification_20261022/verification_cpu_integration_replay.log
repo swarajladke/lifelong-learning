@@ -1,0 +1,19 @@
+test_evaluate_population_records_contract_and_serialization (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_evaluate_population_records_contract_and_serialization)
+Tests that evaluate_population_records evaluates under torch.no_grad() and model.eval(), ... ok
+test_joint_reference_evaluation_only_probe_isolation (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_evaluation_only_probe_isolation)
+Tests that probe evaluation produces zero gradient or parameter mutations, ... ok
+test_joint_reference_failure_diagnostics_persistence_on_error (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_failure_diagnostics_persistence_on_error)
+Tests that run_joint_reference_study catches execution failures, persists ... ok
+test_joint_reference_initialization_checkpoint_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_initialization_checkpoint_validation)
+Tests that load_and_verify_initial_model verifies tensor fingerprint, ... ok
+test_replay_checkpoint_identity_and_rejection (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_replay_checkpoint_identity_and_rejection)
+Tests that load_and_verify_t1_model validates expected post-A checkpoint fingerprint ... ok
+test_replay_failure_persistence_on_error (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_replay_failure_persistence_on_error)
+Tests that run_replay_study catches execution failures, persists ... ok
+test_replay_tiny_e2e_integration (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_replay_tiny_e2e_integration)
+Tests the real training-to-evaluation path of run_replay_study with a bounded ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 7.619s
+
+OK
