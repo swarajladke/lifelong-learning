@@ -42,6 +42,9 @@ from research.lifelong_01.ssrl_evaluator import (
     compute_transfer_from_records,
     atomic_write_json
 )
+from research.lifelong_01.ssrl_checkpoints import capture_and_verify_checkpoint
+from research.lifelong_01.ssrl_counterfactual_probe import evaluate_counterfactual_probe
+from research.lifelong_01.ssrl_reproduction_check import verify_aligned_reproduction
 
 
 APPROVED_TWO_RULE_CONFIG: Dict[str, Any] = {
@@ -185,6 +188,8 @@ def run_two_rule_study(
     expected_sha_b: str,
     destination: str,
     run_dir: str,
+    probe_dataset_path: Optional[str] = None,
+    original_results_path: Optional[str] = None,
     device: Optional[torch.device] = None
 ) -> Dict[str, Any]:
     """Master orchestrator for SSRL-02 study."""
@@ -238,6 +243,11 @@ def run_two_rule_study(
             output_dim=config["output_dim"]
         ).to(device)
         theta_0 = copy.deepcopy(initial_model.state_dict())
+
+        # Checkpoint t0 capture
+        captured_checkpoints = {}
+        captured_checkpoints["checkpoint_t0_init"] = capture_and_verify_checkpoint(theta_0, abs_run_dir, "checkpoint_t0_init.pt")
+
         criterion = nn.CrossEntropyLoss()
 
         # 4. Precompute Minibatch Schedules
@@ -278,6 +288,7 @@ def run_two_rule_study(
         eval_records_all["t1_seq_rule_b_unseen"] = evaluate_population_records(model, dataset_b["eval_unseen_examples"], "seq_ab", config["seed"], 2000, expected_sha_b, device)
 
         theta_a = copy.deepcopy(model.state_dict())
+        captured_checkpoints["checkpoint_t1_post_a"] = capture_and_verify_checkpoint(theta_a, abs_run_dir, "checkpoint_t1_post_a.pt")
 
         # Gate G-LC Verification on Task A Seen
         m_t1_a_seen = compute_accuracy_measurement("rule_a_t1_seen", eval_records_all["t1_seq_rule_a_seen"], expected_sha_a)
@@ -307,6 +318,7 @@ def run_two_rule_study(
         # Checkpoint t2 (Post-Rule B for seq_ab)
         eval_records_all["t2_seq_rule_a_seen"] = evaluate_population_records(model, dataset_a["eval_seen_examples"], "seq_ab", config["seed"], 2500, expected_sha_a, device)
         eval_records_all["t2_seq_rule_a_unseen"] = evaluate_population_records(model, dataset_a["eval_unseen_examples"], "seq_ab", config["seed"], 2500, expected_sha_a, device)
+        captured_checkpoints["checkpoint_t2_seq_ab"] = capture_and_verify_checkpoint(model.state_dict(), abs_run_dir, "checkpoint_t2_seq_ab.pt")
 
         # =====================================================================
         # ARM 2: Fresh Control (fresh_b)
@@ -329,6 +341,8 @@ def run_two_rule_study(
                 eval_records_all[f"t_step{step_idx}_fresh_rule_b_unseen"] = evaluate_population_records(model_fresh, dataset_b["eval_unseen_examples"], "fresh_b", config["seed"], step_idx, expected_sha_b, device)
                 model_fresh.train()
 
+        captured_checkpoints["checkpoint_t2_fresh_b"] = capture_and_verify_checkpoint(model_fresh.state_dict(), abs_run_dir, "checkpoint_t2_fresh_b.pt")
+
         # =====================================================================
         # ARM 3: Freeze After A (freeze_after_a)
         # =====================================================================
@@ -337,6 +351,8 @@ def run_two_rule_study(
         eval_records_all["t2_frozen_rule_a_seen"] = evaluate_population_records(model_frozen, dataset_a["eval_seen_examples"], "freeze_after_a", config["seed"], 2000, expected_sha_a, device)
         eval_records_all["t2_frozen_rule_a_unseen"] = evaluate_population_records(model_frozen, dataset_a["eval_unseen_examples"], "freeze_after_a", config["seed"], 2000, expected_sha_a, device)
         eval_records_all["t2_frozen_rule_b_seen"] = evaluate_population_records(model_frozen, dataset_b["eval_seen_examples"], "freeze_after_a", config["seed"], 2000, expected_sha_b, device)
+        captured_checkpoints["checkpoint_t2_freeze_a"] = capture_and_verify_checkpoint(model_frozen.state_dict(), abs_run_dir, "checkpoint_t2_freeze_a.pt")
+        diagnostics["checkpoints"] = captured_checkpoints
 
         elapsed_training = time.monotonic() - t_start_training
         if elapsed_training > config["wall_clock_ceiling_training_seconds"]:
@@ -378,6 +394,27 @@ def run_two_rule_study(
             "freeze_after_a": {"steps": 2000, "samples": 32000},
         }
 
+        # 6. Optional Counterfactual Mask Probe Diagnostic
+        if probe_dataset_path and os.path.exists(probe_dataset_path):
+            with open(probe_dataset_path, "r", encoding="utf-8") as pf:
+                probe_json = json.load(pf)
+            probe_results = {}
+            for c_name, c_info in captured_checkpoints.items():
+                reloaded_sd = torch.load(c_info["path"], weights_only=True)
+                probe_model = SSRLInstructionMLP(32, 64, 2).to(device)
+                probe_model.load_state_dict(reloaded_sd)
+                probe_results[c_name] = evaluate_counterfactual_probe(probe_model, probe_json["probe_examples"], device)
+            diagnostics["counterfactual_probe"] = probe_results
+
+        # 7. Optional Reproduction Verification against Original Run
+        if original_results_path and os.path.exists(original_results_path):
+            repro_report = verify_aligned_reproduction({
+                "eval_records": {k: [r.to_dict() for r in v] for k, v in eval_records_all.items()},
+                "config": config,
+                "metrics": metrics,
+            }, original_results_path)
+            diagnostics["reproduction_verification"] = repro_report
+
         # Serialize complete output
         serialized_records = {k: [r.to_dict() for r in v] for k, v in eval_records_all.items()}
         final_output = {
@@ -411,6 +448,8 @@ if __name__ == "__main__":
     parser.add_argument("--sha256_b", required=True, help="Expected SHA-256 for Rule B dataset")
     parser.add_argument("--destination", required=True, help="Path to destination results JSON")
     parser.add_argument("--run_dir", required=True, help="Unique path to reserve for run directory")
+    parser.add_argument("--probe_dataset", default=None, help="Optional path to counterfactual probe dataset JSON")
+    parser.add_argument("--original_results", default=None, help="Optional path to original results JSON for reproduction check")
     args = parser.parse_args()
 
     run_two_rule_study(
@@ -421,4 +460,6 @@ if __name__ == "__main__":
         expected_sha_b=args.sha256_b,
         destination=args.destination,
         run_dir=args.run_dir,
+        probe_dataset_path=args.probe_dataset,
+        original_results_path=args.original_results,
     )

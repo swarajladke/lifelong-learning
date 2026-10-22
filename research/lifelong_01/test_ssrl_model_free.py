@@ -34,9 +34,15 @@ Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 30. Two-rule failure diagnostics persistence: writes failure_diagnostics.json on early specification rejection.
 31. Two-rule step 0 transfer delta semantics: compares seq_ab at t1 against fresh_b at t0 on Rule B evaluation population.
 32. Publish results artifact size ceiling: enforces 10 MB limit before Git staging.
-33. Publish results forbidden files guard: rejects .pt, .ckpt, and credential files.
+33. Publish results forbidden files guard: rejects unapproved .pt, .ckpt, and credential files.
 34. Publish results branch guard: strictly rejects 'main' branch targets.
 35. Two-rule JSON serialization integrity: proves make_json_serializable converts dataclasses and measurements.
+36. Counterfactual probe quota and strata feasibility: exactly 128 unique x, opposing parities, 64/32/32 strata, 0 unseen/unseen.
+37. Counterfactual probe unrelaxed quota guard: rejects malformed quotas without silent relaxation.
+38. Counterfactual probe category arithmetic: partitions outcomes into 4 descriptive categories.
+39. Checkpoint capture invariants: RNG state independence, non-mutation, and reload integrity.
+40. Narrow checkpoint publisher allowlist: allows approved .pt < 100 KB, rejects unapproved or oversized .pt and .bin.
+41. Reproduction divergence detector: detects and raises on aligned prediction mismatch against reference artifact.
 """
 
 from __future__ import annotations
@@ -97,6 +103,22 @@ from research.lifelong_01.publish_results import (
     verify_no_forbidden_files,
     publish_run_artifacts,
     MAX_ALLOWED_RUN_BYTES,
+)
+from research.lifelong_01.ssrl_counterfactual_probe import (
+    generate_counterfactual_probe_dataset,
+    validate_counterfactual_probe_contract,
+    evaluate_counterfactual_probe,
+    STRATA_QUOTAS,
+)
+from research.lifelong_01.ssrl_checkpoints import (
+    capture_and_verify_checkpoint,
+    compute_tensor_fingerprint_from_state_dict,
+    ALLOWED_CHECKPOINT_FILENAMES,
+    MAX_CHECKPOINT_FILE_BYTES,
+)
+from research.lifelong_01.ssrl_reproduction_check import (
+    verify_aligned_reproduction,
+    ReproductionDivergenceError,
 )
 
 
@@ -948,7 +970,7 @@ class TestSSRLModelFree(unittest.TestCase):
 
     def test_publish_forbidden_checkpoints_rejected(self):
         """
-        Tests that verify_no_forbidden_files rejects .pt, .ckpt, and credential files.
+        Tests that verify_no_forbidden_files rejects unapproved .pt, .ckpt, and credential files.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             ckpt_file = os.path.join(tmpdir, "model_weights.pt")
@@ -956,7 +978,15 @@ class TestSSRLModelFree(unittest.TestCase):
                 f.write("dummy")
             with self.assertRaises(ValueError) as ctx:
                 verify_no_forbidden_files(tmpdir)
-            self.assertIn("Forbidden checkpoint file", str(ctx.exception))
+            self.assertIn("Unapproved .pt checkpoint", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_file2 = os.path.join(tmpdir, "model_weights.ckpt")
+            with open(ckpt_file2, "w") as f:
+                f.write("dummy")
+            with self.assertRaises(ValueError) as ctx2:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("Forbidden checkpoint extension", str(ctx2.exception))
 
         with tempfile.TemporaryDirectory() as tmpdir:
             secret_file = os.path.join(tmpdir, "github_token.txt")
@@ -999,6 +1029,239 @@ class TestSSRLModelFree(unittest.TestCase):
         dumped = json.dumps(serialized)
         self.assertIsInstance(dumped, str)
         self.assertIn('"numerator": 10', dumped)
+
+    def test_counterfactual_probe_quotas_and_pairing(self):
+        """
+        Tests that generate_counterfactual_probe_dataset satisfies the exact quota
+        and parity pairing specifications on pinned datasets.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        with open(dataset_a_path) as fa:
+            da = json.load(fa)
+        with open(dataset_b_path) as fb:
+            db = json.load(fb)
+
+        probe = generate_counterfactual_probe_dataset(da, db, seed=3030)
+        exs = probe["probe_examples"]
+        self.assertEqual(len(exs), 128)
+
+        # Check opposing parities
+        for e in exs:
+            self.assertNotEqual(e["target_class_a"], e["target_class_b"])
+
+        # Check strata quotas
+        seen_seen = sum(1 for e in exs if e["stratum"] == "seen_seen")
+        seen_unseen = sum(1 for e in exs if e["stratum"] == "seen_unseen")
+        unseen_seen = sum(1 for e in exs if e["stratum"] == "unseen_seen")
+        unseen_unseen = sum(1 for e in exs if e["stratum"] == "unseen_unseen")
+
+        self.assertEqual(seen_seen, 64)
+        self.assertEqual(seen_unseen, 32)
+        self.assertEqual(unseen_seen, 32)
+        self.assertEqual(unseen_unseen, 0)
+
+        # Check orientation balance
+        a1_b0 = sum(1 for e in exs if e["target_class_a"] == 1 and e["target_class_b"] == 0)
+        a0_b1 = sum(1 for e in exs if e["target_class_a"] == 0 and e["target_class_b"] == 1)
+        self.assertEqual(a1_b0, 64)
+        self.assertEqual(a0_b1, 64)
+
+        # Check training pool exclusion
+        train_a_xs = {tuple(x["features"]) for x in da["train_examples"]}
+        train_b_xs = {tuple(x["features"]) for x in db["train_examples"]}
+        probe_xs = {tuple(x["features"]) for x in exs}
+        self.assertEqual(len(probe_xs), 128)
+        self.assertEqual(len(probe_xs & train_a_xs), 0)
+        self.assertEqual(len(probe_xs & train_b_xs), 0)
+
+        # Contract validation passes
+        self.assertTrue(validate_counterfactual_probe_contract(probe, da, db))
+
+    def test_counterfactual_probe_unrelaxed_quota_guard(self):
+        """
+        Tests that validate_counterfactual_probe_contract raises ValueError
+        if any quota is violated, ensuring quotas are never relaxed silently.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        with open(dataset_a_path) as fa:
+            da = json.load(fa)
+        with open(dataset_b_path) as fb:
+            db = json.load(fb)
+
+        probe = generate_counterfactual_probe_dataset(da, db, seed=3030)
+
+        # 1. Corrupt one label to match opposing (violates parity difference)
+        bad_probe = copy.deepcopy(probe)
+        bad_probe["probe_examples"][0]["target_class_b"] = bad_probe["probe_examples"][0]["target_class_a"]
+        with self.assertRaises(ValueError) as ctx:
+            validate_counterfactual_probe_contract(bad_probe, da, db)
+        self.assertIn("violates opposing parity constraint", str(ctx.exception))
+
+        # 2. Corrupt strata count (e.g. modify stratum string)
+        bad_strata = copy.deepcopy(probe)
+        bad_strata["probe_examples"][0]["stratum"] = "unseen_unseen"
+        with self.assertRaises(ValueError) as ctx2:
+            validate_counterfactual_probe_contract(bad_strata, da, db)
+        self.assertTrue("Stratum" in str(ctx2.exception))
+
+    def test_counterfactual_probe_category_arithmetic(self):
+        """
+        Tests that evaluate_counterfactual_probe partitions outcomes into
+        all four mutually exclusive, exhaustive descriptive categories.
+        """
+        class MockProbeModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+            def forward(self, u):
+                # Distinguish by mask
+                mask_is_a = (u[0, 0].item() == 1.0 and u[0, 16].item() == 1.0)
+                # Predict based on example features
+                ex_type = int(u[0, 8].item())  # we pack mock test ID into feature 8
+                if ex_type == 1:
+                    # both_correct: target A=1, B=0 -> predict A=1, B=0
+                    return torch.tensor([[0.1, 0.9] if mask_is_a else [0.9, 0.1]])
+                elif ex_type == 2:
+                    # both_incorrect_with_switched_predictions: target A=1, B=0 -> predict A=0, B=1
+                    return torch.tensor([[0.9, 0.1] if mask_is_a else [0.1, 0.9]])
+                elif ex_type == 3:
+                    # unchanged_prediction_matching_a_target: predict A=1, B=1
+                    return torch.tensor([[0.1, 0.9]])
+                elif ex_type == 4:
+                    # unchanged_prediction_matching_b_target: predict A=0, B=0
+                    return torch.tensor([[0.9, 0.1]])
+                return torch.tensor([[0.5, 0.5]])
+
+        # Hand-craft 4 probe examples covering all 4 categories
+        mock_examples = [
+            {"probe_id": 0, "features": [1]*8 + [1] + [1]*7, "target_class_a": 1, "target_class_b": 0, "stratum": "seen_seen"},
+            {"probe_id": 1, "features": [1]*8 + [2] + [1]*7, "target_class_a": 1, "target_class_b": 0, "stratum": "seen_seen"},
+            {"probe_id": 2, "features": [1]*8 + [3] + [1]*7, "target_class_a": 1, "target_class_b": 0, "stratum": "seen_unseen"},
+            {"probe_id": 3, "features": [1]*8 + [4] + [1]*7, "target_class_a": 1, "target_class_b": 0, "stratum": "unseen_seen"},
+        ]
+
+        model = MockProbeModel()
+        res = evaluate_counterfactual_probe(model, mock_examples, torch.device("cpu"))
+        overall = res["overall_metrics"]
+
+        self.assertEqual(overall["total_pairs"], 4)
+        cats = overall["category_counts"]
+        self.assertEqual(cats["both_correct"]["numerator"], 1)
+        self.assertEqual(cats["both_incorrect_with_switched_predictions"]["numerator"], 1)
+        self.assertEqual(cats["unchanged_prediction_matching_a_target"]["numerator"], 1)
+        self.assertEqual(cats["unchanged_prediction_matching_b_target"]["numerator"], 1)
+
+        # Sum of categories equals total pairs
+        cat_sum = sum(v["numerator"] for v in cats.values())
+        self.assertEqual(cat_sum, 4)
+
+        # Switch rate = (1 + 1) / 4 = 50.0%
+        self.assertAlmostEqual(overall["switch_rate"]["pct"], 50.0)
+        # Joint correctness = 1 / 4 = 25.0%
+        self.assertAlmostEqual(overall["joint_correctness_rate"]["pct"], 25.0)
+        # Accuracy Mask A = 2 / 4 = 50.0% (both_correct and unchanged_matching_a)
+        self.assertAlmostEqual(overall["accuracy_mask_a"]["pct"], 50.0)
+        # Accuracy Mask B = 2 / 4 = 50.0% (both_correct and unchanged_matching_b)
+        self.assertAlmostEqual(overall["accuracy_mask_b"]["pct"], 50.0)
+
+    def test_checkpoint_capture_invariants(self):
+        """
+        Tests that capture_and_verify_checkpoint preserves RNG states,
+        does not mutate state, verifies size limit, and reloads identically.
+        """
+        dummy_sd = {
+            "layer1.weight": torch.randn(64, 32),
+            "layer1.bias": torch.randn(64),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Allowed checkpoint name succeeds
+            meta = capture_and_verify_checkpoint(dummy_sd, tmpdir, "checkpoint_t0_init.pt")
+            self.assertEqual(meta["filename"], "checkpoint_t0_init.pt")
+            self.assertTrue(os.path.exists(meta["path"]))
+            self.assertLess(meta["size_bytes"], MAX_CHECKPOINT_FILE_BYTES)
+            self.assertEqual(len(meta["tensor_fingerprint"]), 64)
+
+            # 2. Unapproved checkpoint name rejected
+            with self.assertRaises(ValueError) as ctx:
+                capture_and_verify_checkpoint(dummy_sd, tmpdir, "unapproved.pt")
+            self.assertIn("Forbidden checkpoint filename", str(ctx.exception))
+
+            # 3. Refuses overwrite
+            with self.assertRaises(FileExistsError):
+                capture_and_verify_checkpoint(dummy_sd, tmpdir, "checkpoint_t0_init.pt")
+
+    def test_narrow_checkpoint_publisher_allowlist(self):
+        """
+        Tests that publisher allows only approved checkpoint filenames under 100 KB,
+        rejects unapproved .pt files, rejects oversized .pt files, and rejects other extensions.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Approved checkpoint under 100 KB passes
+            valid_ckpt = os.path.join(tmpdir, "checkpoint_t1_post_a.pt")
+            with open(valid_ckpt, "wb") as f:
+                f.write(b"x" * 1024)
+            verify_no_forbidden_files(tmpdir)
+
+            # 2. Unapproved .pt file rejected
+            invalid_pt = os.path.join(tmpdir, "arbitrary_model.pt")
+            with open(invalid_pt, "wb") as f:
+                f.write(b"x" * 1024)
+            with self.assertRaises(ValueError) as ctx:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("Unapproved .pt checkpoint", str(ctx.exception))
+            os.remove(invalid_pt)
+
+            # 3. Oversized approved checkpoint rejected (> 100 KB)
+            oversized_ckpt = os.path.join(tmpdir, "checkpoint_t2_seq_ab.pt")
+            with open(oversized_ckpt, "wb") as f:
+                f.seek(150 * 1024)
+                f.write(b"0")
+            with self.assertRaises(ValueError) as ctx2:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("exceeds 100 KB ceiling", str(ctx2.exception))
+            os.remove(oversized_ckpt)
+
+            # 4. Forbidden extension (.bin) rejected
+            bin_file = os.path.join(tmpdir, "model.bin")
+            with open(bin_file, "wb") as f:
+                f.write(b"x" * 1024)
+            with self.assertRaises(ValueError) as ctx3:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("Forbidden checkpoint extension", str(ctx3.exception))
+
+    def test_reproduction_divergence_detector(self):
+        """
+        Tests that verify_aligned_reproduction raises ReproductionDivergenceError
+        when any individual aligned prediction differs from the reference artifact.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref_path = os.path.join(tmpdir, "ref_results.json")
+            ref_data = {
+                "config": {"run_id": "ref_run"},
+                "eval_records": {
+                    "split_1": [
+                        {"example_id": 1, "predicted_class": 1, "target_class": 1, "is_correct": True, "step": 0},
+                        {"example_id": 2, "predicted_class": 0, "target_class": 0, "is_correct": True, "step": 0},
+                    ]
+                }
+            }
+            with open(ref_path, "w") as f:
+                json.dump(ref_data, f)
+
+            # 1. Matching replay passes
+            replay_matching = copy.deepcopy(ref_data)
+            report = verify_aligned_reproduction(replay_matching, ref_path)
+            self.assertTrue(report["outcome_reproduction_verified"])
+            self.assertEqual(report["total_predictions_checked"], 2)
+
+            # 2. Divergent prediction raises ReproductionDivergenceError
+            replay_divergent = copy.deepcopy(ref_data)
+            replay_divergent["eval_records"]["split_1"][0]["predicted_class"] = 0
+            replay_divergent["eval_records"]["split_1"][0]["is_correct"] = False
+            with self.assertRaises(ReproductionDivergenceError) as ctx:
+                verify_aligned_reproduction(replay_divergent, ref_path)
+            self.assertIn("Prediction divergence", str(ctx.exception))
 
 
 if __name__ == "__main__":

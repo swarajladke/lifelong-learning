@@ -25,8 +25,18 @@ from typing import Optional, Dict, Any
 
 
 MAX_ALLOWED_RUN_BYTES: int = 10 * 1024 * 1024  # 10 MB ceiling
-FORBIDDEN_EXTENSIONS = {".pt", ".pth", ".bin", ".ckpt", ".pkl"}
+FORBIDDEN_EXTENSIONS = {".pth", ".bin", ".ckpt", ".pkl"}
 FORBIDDEN_SUBSTRINGS = {"id_rsa", "id_ed25519", ".env", "token", "secret", "credential"}
+
+# Narrow allowlist strictly for SSRL-02 size-bounded model state checkpoints
+ALLOWED_CHECKPOINT_FILENAMES = {
+    "checkpoint_t0_init.pt",
+    "checkpoint_t1_post_a.pt",
+    "checkpoint_t2_seq_ab.pt",
+    "checkpoint_t2_fresh_b.pt",
+    "checkpoint_t2_freeze_a.pt",
+}
+MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 
 
 def get_token(secret_name: str = "GITHUB_RESULTS_TOKEN") -> Optional[str]:
@@ -62,13 +72,27 @@ def calculate_and_verify_run_size(run_dir: str) -> int:
 
 
 def verify_no_forbidden_files(run_dir: str) -> None:
-    """Rejects large binary checkpoints and credential-like files."""
+    """
+    Rejects large binary checkpoints, unapproved weights, and credential-like files.
+    Only explicit, size-bounded checkpoints in ALLOWED_CHECKPOINT_FILENAMES are permitted.
+    """
     for root, _, files in os.walk(run_dir):
         for f in files:
             f_lower = f.lower()
             ext = os.path.splitext(f_lower)[1]
             if ext in FORBIDDEN_EXTENSIONS:
-                raise ValueError(f"Forbidden checkpoint file detected in run artifacts: {f}")
+                raise ValueError(f"Forbidden checkpoint extension detected in run artifacts: {f}")
+            if ext == ".pt":
+                if f not in ALLOWED_CHECKPOINT_FILENAMES:
+                    raise ValueError(
+                        f"Unapproved .pt checkpoint detected in run artifacts: '{f}'. "
+                        f"Only explicit allowlist {sorted(list(ALLOWED_CHECKPOINT_FILENAMES))} is permitted."
+                    )
+                fp = os.path.join(root, f)
+                if os.path.getsize(fp) > MAX_INDIVIDUAL_CHECKPOINT_BYTES:
+                    raise ValueError(
+                        f"Checkpoint '{f}' ({os.path.getsize(fp)} bytes) exceeds 100 KB ceiling ({MAX_INDIVIDUAL_CHECKPOINT_BYTES} bytes)."
+                    )
             for sub in FORBIDDEN_SUBSTRINGS:
                 if sub in f_lower:
                     raise ValueError(f"Forbidden credential-like filename detected in run artifacts: {f}")
@@ -235,8 +259,10 @@ def publish_run_artifacts(
             env=git_env,
         )
 
+        status_str = "SUCCESS" if experiment_exit_code == 0 else "FAILED"
         commit_msg = (
-            f"chore(results): record SSRL-02 run {run_id}\n\n"
+            f"chore(results): record SSRL-02 run {run_id} [{status_str}]\n\n"
+            f"Status: {status_str}\n"
             f"Source Commit: {source_commit}\n"
             f"Experiment Exit Code: {experiment_exit_code}\n"
             f"Artifact Size: {run_bytes} bytes\n"
