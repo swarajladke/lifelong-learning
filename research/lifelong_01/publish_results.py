@@ -113,6 +113,7 @@ def publish_run_artifacts(
     experiment_exit_code: int,
     target_branch: str = "experiment-results",
     secret_name: str = "GITHUB_RESULTS_TOKEN",
+    study_name: str = "ssrl_03",
 ) -> Dict[str, Any]:
     """
     Publishes run artifacts to the dedicated results branch in a fresh clone.
@@ -143,35 +144,28 @@ def publish_run_artifacts(
         print(f"[Publish Error] {publish_status['error_message']}")
         return publish_status
 
-    # 2. Retrieve authentication token
+    # 2. Retrieve authentication token (or fall back to ambient credentials)
     token = get_token(secret_name)
-    if not token:
-        publish_status["error_message"] = f"Kaggle secret '{secret_name}' is not configured or empty."
-        print(f"[Publish Note] Automated upload skipped: {publish_status['error_message']}")
-        return publish_status
-
     publish_status["upload_attempted"] = True
 
     # 3. Create isolated temporary publishing workspace
     publish_workspace = tempfile.mkdtemp(prefix="ssrl_publish_")
-    askpass_sh = os.path.join(publish_workspace, "askpass.sh")
     try:
-        # Create secure askpass script
-        with open(askpass_sh, "w") as f:
-            f.write('#!/bin/sh\necho "$RESULTS_TOKEN"\n')
-        os.chmod(askpass_sh, 0o700)
-
         git_env = os.environ.copy()
-        git_env["GIT_ASKPASS"] = askpass_sh
-        git_env["RESULTS_TOKEN"] = token
-
-        # Normalise remote URL for askpass (use https without embedded tokens)
         clean_repo_url = repo_url
         if "@" in clean_repo_url and clean_repo_url.startswith("https://"):
             clean_repo_url = "https://" + clean_repo_url.split("@", 1)[1]
 
-        # Use dummy username so askpass supplies token as password
-        auth_url = clean_repo_url.replace("https://", "https://x-access-token@")
+        if token:
+            askpass_sh = os.path.join(publish_workspace, "askpass.sh")
+            with open(askpass_sh, "w") as f:
+                f.write('#!/bin/sh\necho "$RESULTS_TOKEN"\n')
+            os.chmod(askpass_sh, 0o700)
+            git_env["GIT_ASKPASS"] = askpass_sh
+            git_env["RESULTS_TOKEN"] = token
+            auth_url = clean_repo_url.replace("https://", "https://x-access-token@")
+        else:
+            auth_url = clean_repo_url
 
         # Check if remote target branch exists
         ls_proc = subprocess.run(
@@ -227,7 +221,7 @@ def publish_run_artifacts(
             )
 
         # 4. Destination path in dedicated results branch
-        target_run_dir = os.path.join(clone_dir, "runs", "ssrl_02", run_id)
+        target_run_dir = os.path.join(clone_dir, "runs", study_name, run_id)
         if os.path.exists(target_run_dir):
             raise FileExistsError(
                 f"Run directory already exists on '{target_branch}': {target_run_dir}. "
@@ -247,12 +241,12 @@ def publish_run_artifacts(
 
         # Configure minimal committer metadata
         subprocess.run(
-            ["git", "-C", clone_dir, "config", "user.name", "Kaggle Automated Runner"],
+            ["git", "-C", clone_dir, "config", "user.name", "SSRL Automated Runner"],
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            ["git", "-C", clone_dir, "config", "user.email", "kaggle-runner@users.noreply.github.com"],
+            ["git", "-C", clone_dir, "config", "user.email", "runner@users.noreply.github.com"],
             check=True,
             capture_output=True,
         )
@@ -268,7 +262,7 @@ def publish_run_artifacts(
 
         status_str = "SUCCESS" if experiment_exit_code == 0 else "FAILED"
         commit_msg = (
-            f"chore(results): record SSRL-02 run {run_id} [{status_str}]\n\n"
+            f"chore(results): record {study_name.upper()} run {run_id} [{status_str}]\n\n"
             f"Status: {status_str}\n"
             f"Source Commit: {source_commit}\n"
             f"Experiment Exit Code: {experiment_exit_code}\n"
@@ -289,7 +283,7 @@ def publish_run_artifacts(
 
         publish_status["upload_successful"] = True
         publish_status["github_url"] = (
-            f"https://github.com/swarajladke/lifelong-learning/tree/{target_branch}/runs/ssrl_02/{run_id}"
+            f"https://github.com/swarajladke/lifelong-learning/tree/{target_branch}/runs/{study_name}/{run_id}"
         )
         print(f"[Publish Success] Run artifacts published to: {publish_status['github_url']}")
 
@@ -311,6 +305,7 @@ if __name__ == "__main__":
     parser.add_argument("--source_commit", required=True, help="Commit SHA of code tested")
     parser.add_argument("--exit_code", type=int, required=True, help="Exit code of experiment execution")
     parser.add_argument("--secret_name", default="GITHUB_RESULTS_TOKEN", help="Kaggle secret name")
+    parser.add_argument("--study_name", default="ssrl_03", help="Subdirectory under runs (e.g. ssrl_02, ssrl_03)")
     args = parser.parse_args()
 
     res = publish_run_artifacts(
@@ -320,6 +315,7 @@ if __name__ == "__main__":
         source_commit=args.source_commit,
         experiment_exit_code=args.exit_code,
         secret_name=args.secret_name,
+        study_name=args.study_name,
     )
     # Never exit nonzero solely because upload failed: experiment exit code is primary
     print(f"[Publish Status Summary] Attempted: {res['upload_attempted']}, Succeeded: {res['upload_successful']}")

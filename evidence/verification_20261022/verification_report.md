@@ -36,3 +36,12 @@
 The initial run of `TestSSRLCPUIntegration` failed due to a keyword mismatch (`study_id`) on `load_and_verify_dataset`:
 - Preserved in: `evidence/verification_20261022/evidence_failed_verification_20261022.log`
 - Resolved by constructing explicit `approved_config` dictionaries (`config_a`, `config_b`) matching `run_ssrl_two_rule.py`.
+
+---
+
+## 3. Evaluator Record Contract Verification (Post-Fix)
+**Date:** 2026-10-22T15:53:00+05:30  
+- Suite 1 (`TestSSRLModelFree`): 45 tests discovered, 45 passed, 0 failures, exit code 0 (1.097 s). Log: `evidence/verification_20261022/verification_modelfree_evalfix.log`.
+- Suite 2 (`TestSSRLCPUIntegration`): 4 tests discovered, 4 passed, 0 failures, exit code 0 (4.291 s). Log: `evidence/verification_20261022/verification_cpu_integration_evalfix.log`.
+  - Added test: `test_evaluate_population_records_contract_and_serialization`.
+  - Verified: constructs valid `SSRLExampleRecord` matching real schema (`input_features`, `selection_mask`, `is_correct`), population completeness (192 seen + 64 unseen), clean roundtrip JSON serialization, raw-logit preservation in probe's intended schema, and zero model mutation or parameter gradients.

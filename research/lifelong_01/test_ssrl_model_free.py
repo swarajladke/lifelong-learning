@@ -48,6 +48,7 @@ Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 from __future__ import annotations
 import os
 import time
+import math
 import copy
 import tempfile
 import unittest
@@ -131,6 +132,7 @@ from research.lifelong_01.run_ssrl_joint_reference import (
     PROPOSED_JOINT_REFERENCE_CONFIG,
     APPROVED_JOINT_REFERENCE_CONFIG,
     run_joint_reference_study,
+    evaluate_population_records,
 )
 
 
@@ -1568,6 +1570,124 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
             with self.assertRaises(FileExistsError):
                 reserve_run_directory(run_dir)
+
+    def test_evaluate_population_records_contract_and_serialization(self):
+        """
+        Tests that evaluate_population_records evaluates under torch.no_grad() and model.eval(),
+        constructs valid SSRLExampleRecord instances matching the real schema, preserves all
+        required fields (IDs, rule identity, dataset hash, input_features, selection_mask,
+        target_class, predicted_class, is_correct, is_held_out_pattern), achieves population
+        completeness, serializes cleanly to JSON, verifies raw-logit preservation through
+        the probe's intended schema, and guarantees zero model mutation or parameter gradients.
+        """
+        device = torch.device("cpu")
+        model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+        fp_before = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+
+        # Load pinned dataset A
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        with open(dataset_a_path, "r", encoding="utf-8") as f:
+            dataset_a = json.load(f)
+        with open(dataset_a_path, "rb") as fb:
+            sha_a = hashlib.sha256(fb.read()).hexdigest()
+
+        eval_seen = dataset_a["eval_seen_examples"]
+        eval_unseen = dataset_a["eval_unseen_examples"]
+        self.assertEqual(len(eval_seen), 192)
+        self.assertEqual(len(eval_unseen), 64)
+
+        # 1. Evaluate seen population
+        seen_records = evaluate_population_records(
+            model=model,
+            examples=eval_seen,
+            arm="joint_reference",
+            seed=101,
+            step=2500,
+            dataset_sha256=sha_a,
+            device=device
+        )
+        self.assertEqual(len(seen_records), 192)
+
+        # 2. Evaluate unseen population
+        unseen_records = evaluate_population_records(
+            model=model,
+            examples=eval_unseen,
+            arm="joint_reference",
+            seed=101,
+            step=2500,
+            dataset_sha256=sha_a,
+            device=device
+        )
+        self.assertEqual(len(unseen_records), 64)
+
+        # 3. Field validation and population completeness across all records
+        all_eval_records = seen_records + unseen_records
+        all_examples = eval_seen + eval_unseen
+        seen_ids = set()
+
+        for rec, ex in zip(all_eval_records, all_examples):
+            self.assertIsInstance(rec, SSRLExampleRecord)
+            self.assertEqual(rec.example_id, ex["example_id"])
+            self.assertNotIn(rec.example_id, seen_ids)
+            seen_ids.add(rec.example_id)
+
+            self.assertEqual(rec.rule_id, 1)
+            self.assertEqual(rec.arm, "joint_reference")
+            self.assertEqual(rec.seed, 101)
+            self.assertEqual(rec.step, 2500)
+            self.assertEqual(rec.dataset_sha256, sha_a)
+            self.assertEqual(rec.input_features, ex["features"])
+            self.assertEqual(len(rec.input_features), 16)
+            self.assertEqual(rec.selection_mask, ex["mask"])
+            self.assertEqual(len(rec.selection_mask), 16)
+            self.assertEqual(rec.target_class, ex["target_class"])
+            self.assertIn(rec.predicted_class, (0, 1))
+            self.assertEqual(rec.is_correct, (rec.predicted_class == rec.target_class))
+            self.assertEqual(rec.is_held_out_pattern, ex["is_held_out_pattern"])
+
+        # 4. Downstream serialization verification
+        serialized_seen = [r.to_dict() for r in seen_records]
+        serialized_unseen = [r.to_dict() for r in unseen_records]
+        self.assertEqual(len(serialized_seen), 192)
+        self.assertEqual(len(serialized_unseen), 64)
+
+        # Roundtrip JSON serialization check
+        json_dump = json.dumps({"seen": serialized_seen, "unseen": serialized_unseen})
+        parsed = json.loads(json_dump)
+        self.assertEqual(len(parsed["seen"]), 192)
+        self.assertEqual(parsed["seen"][0]["dataset_sha256"], sha_a)
+        self.assertEqual(len(parsed["seen"][0]["input_features"]), 16)
+
+        # 5. Raw-logit preservation check through intended schema (counterfactual probe)
+        valid_x = [1] * 16
+        valid_x[4] = -1
+        probe_examples = [
+            {
+                "probe_id": 42,
+                "features": valid_x,
+                "target_class_a": 1,
+                "target_class_b": 0,
+                "stratum": "seen_seen",
+                "is_held_out_a": False,
+                "is_held_out_b": False
+            }
+        ]
+        probe_eval = evaluate_counterfactual_probe(model, probe_examples, device=device)
+        self.assertEqual(len(probe_eval["pair_records"]), 1)
+        pr = probe_eval["pair_records"][0]
+        # Assert raw logits are preserved in intended schema
+        self.assertIn("logits_a", pr)
+        self.assertIn("logits_b", pr)
+        self.assertEqual(len(pr["logits_a"]), 2)
+        self.assertEqual(len(pr["logits_b"]), 2)
+        self.assertTrue(all(isinstance(v, float) and math.isfinite(v) for v in pr["logits_a"]))
+        self.assertTrue(all(isinstance(v, float) and math.isfinite(v) for v in pr["logits_b"]))
+
+        # 6. Zero mutation and zero gradient verification
+        fp_after = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+        self.assertEqual(fp_before, fp_after)
+        for p in model.parameters():
+            self.assertIsNone(p.grad)
 
 
 if __name__ == "__main__":

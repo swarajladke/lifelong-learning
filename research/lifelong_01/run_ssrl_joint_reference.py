@@ -249,26 +249,19 @@ def evaluate_population_records(
             pred = int(torch.argmax(logits, dim=1).item())
             target = int(ex["target_class"])
             correct = (pred == target)
-            active_p = ex.get("active_pattern")
-            if active_p is None:
-                coords = ex.get("rule_indices", [0, 1, 2, 3])
-                active_p = [feat[i] for i in coords]
-
             records.append(SSRLExampleRecord(
                 example_id=int(ex["example_id"]),
                 rule_id=int(ex["rule_id"]),
-                features=list(feat),
-                mask=list(mask),
-                active_pattern=list(active_p),
+                arm=arm,
+                seed=seed,
+                step=step,
+                dataset_sha256=dataset_sha256,
+                input_features=list(feat),
+                selection_mask=list(mask),
                 target_class=target,
                 predicted_class=pred,
-                correct=correct,
-                logits=[float(l) for l in logits.squeeze(0).tolist()],
+                is_correct=correct,
                 is_held_out_pattern=bool(ex.get("is_held_out_pattern", False)),
-                arm=arm,
-                step=step,
-                seed=seed,
-                dataset_sha256=dataset_sha256
             ))
 
     return records
