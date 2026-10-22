@@ -421,3 +421,33 @@ def run_replay_study(
         except Exception:
             pass
         raise
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SSRL-04 Replay-Assisted Sequential Baseline Runner")
+    parser.add_argument("--dataset_a", required=True, help="Path to Rule A dataset JSON")
+    parser.add_argument("--dataset_b", required=True, help="Path to Rule B dataset JSON")
+    parser.add_argument("--probe_dataset", required=True, help="Path to probe dataset JSON")
+    parser.add_argument("--t1_checkpoint", required=True, help="Path to post-A checkpoint_t1_post_a.pt")
+    parser.add_argument("--run_dir", required=True, help="Unique run directory path")
+    parser.add_argument("--destination", required=True, help="Path to output results.json")
+    parser.add_argument("--sha256_a", default="00a21efad1dc07b826198d99b0b702aedddad57b6226f99301afbf16327fd0b7")
+    parser.add_argument("--sha256_b", default="27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4")
+    parser.add_argument("--sha256_probe", default="1c07d50fed772cfcff86e3bf30cc74a95cdc24d190ec767aa15365671fe06319")
+    args = parser.parse_args()
+
+    res = run_replay_study(
+        dataset_a_path=args.dataset_a,
+        sha256_a=args.sha256_a,
+        dataset_b_path=args.dataset_b,
+        sha256_b=args.sha256_b,
+        probe_dataset_path=args.probe_dataset,
+        sha256_probe=args.sha256_probe,
+        destination=args.destination,
+        run_dir=args.run_dir,
+        t1_checkpoint_path=args.t1_checkpoint,
+    )
+    cats = res['diagnostics']['counterfactual_probe']['overall_metrics']['category_counts']
+    print(f"[SSRL-04 Replay Completed] Acc A Seen: {res['metrics']['acc_rule_a_seen']['pct']:.2f}% | "
+          f"Acc B Seen: {res['metrics']['acc_rule_b_seen']['pct']:.2f}% | "
+          f"Probe Both Correct: {cats['both_correct']['numerator']}/128")
