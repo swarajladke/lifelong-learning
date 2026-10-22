@@ -300,6 +300,7 @@ if __name__ == "__main__":
         destination=args.destination,
         recovery_commit=args.recovery_commit,
     )
+    cats = res['diagnostics']['counterfactual_probe']['overall_metrics']['category_counts']
     print(f"[Recovery Completed] Acc A Seen: {res['metrics']['acc_rule_a_seen']['pct']:.2f}% | "
           f"Acc B Seen: {res['metrics']['acc_rule_b_seen']['pct']:.2f}% | "
-          f"Probe Both Correct: {res['diagnostics']['counterfactual_probe']['overall_metrics']['categories']['both_correct']['count']}/128")
+          f"Probe Both Correct: {cats['both_correct']['numerator']}/128")
