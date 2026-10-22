@@ -277,6 +277,14 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Catastrophic Forgetting:** Rule A seen pattern accuracy drops by 42.19 percentage points (from 100.00% at $t_1$ to 57.81% at $t_2$), while `freeze_after_a` retains 100.00%.
    - **Forward Transfer & Interference:** Rule B is learned to 100.00% (192/192) in 500 steps by `fresh_b`, while `seq_ab` reaches only 80.73% (155/192) at 500 steps, demonstrating negative acquisition transfer without isolation mechanisms.
 
+8. **SSRL-02 Checkpoint-Capture and Counterfactual Probe Test Suite Verification (2026-10-22) [Reported]:**
+   - **Target Commit:** `3c98d26e359abc1edb0569719e07974e6b2ea739`
+   - **Environment:** Remote Kaggle Notebook (CPU-only, no accelerator).
+   - **Run ID:** `ssrl_verify_cd8fb219`
+   - **Reported Outcome:** 41 / 41 unit and regression tests passed in 6.120s with exit code 0.
+   - **Scaffolding Certified:** Pinned 128-vector probe generator and contract validator, 4-way descriptive outcome evaluation categories, RNG-invariant checkpoint capture, narrow publisher allowlist, and aligned bit-for-bit reproduction checks against `ssrl_02_d3100b00`.
+   - **Compute Status:** Zero neural compute or dataset generation executed.
+
 ---
 
 ## 9. Collaboration Preferences
@@ -301,5 +309,8 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 - [x] Author automated publishing utility for `experiment-results` branch.
 - [x] Ingest and verify SSRL-02 remote run artifacts (`evidence/runs/ssrl_02_d3100b00/`).
 - [x] Document empirical findings on catastrophic forgetting and transfer deltas.
+- [x] Complete scaffolding & verify 41 model-free tests on Kaggle for counterfactual probe & checkpoint capture (commit `3c98d26`, run `ssrl_verify_cd8fb219`).
+- [ ] Generate and pin counterfactual probe dataset `ssrl_probe_counterfactual_128.json` (Awaiting authorization).
+- [ ] Execute authorized replay with checkpoint capture and counterfactual evaluation.
 
 

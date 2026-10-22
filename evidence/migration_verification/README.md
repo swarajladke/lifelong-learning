@@ -137,6 +137,19 @@ OK
    - Step 250: Interference in sequential arm (-33.85% seen transfer delta: `fresh_b` reaches 185/192 = 96.35%, while `seq_ab` lags at 120/192 = 62.50%).
    - Step 500: `fresh_b` achieves 192/192 (100.00%) seen accuracy, while `seq_ab` reaches only 155/192 (80.73%), demonstrating that prior Rule A optimization produces negative transfer / slowed convergence for Rule B without plasticity protection.
 
+---
+
+## 7. SSRL-02 Expanded 41-Test Suite Remote Verification (2026-10-22) [Reported]
+
+- **Target Commit:** `3c98d26e359abc1edb0569719e07974e6b2ea739`
+- **Execution Environment:** Kaggle Notebook (CPU-only, no accelerator)
+- **Run ID:** `ssrl_verify_cd8fb219`
+- **Remote Directory:** `/kaggle/working/ssrl_verify_cd8fb219`
+- **Discovered Test Count:** 41 tests
+- **Reported Outcome:** 41 run, 41 passed, 0 failures, 0 errors in 6.120s (Reported exit code: `0`)
+- **Verification Status:** **REPORTED ONLY** (Researcher-Reported Terminal Stream).
+  *Coverage:* Certifies counterfactual mask probe generator, contract validator (opposing parity, 128 unique vectors, 64/32/32 strata quotas, training pool exclusion), size-bounded checkpoint capture invariants, narrow publisher allowlist, and aligned reproduction verification. Zero neural training executed.
+
 
 
 
