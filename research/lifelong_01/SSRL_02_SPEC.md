@@ -72,10 +72,14 @@ To prevent cross-stream contamination, random number generation is partitioned i
 
 ### Frozen Pre-Generated Evaluation Populations
 Evaluation populations are generated and byte-hash pinned to disk **prior to any training**:
-- **Rule A Eval Seen ($N = 192$):** 12 observed active patterns $\times$ 16 distinct distractor draws.
-- **Rule A Eval Unseen ($N = 64$):** 4 held-out active patterns $\times$ 16 distinct distractor draws.
-- **Rule B Eval Seen ($N = 192$):** 12 observed active patterns $\times$ 16 distinct distractor draws.
-- **Rule B Eval Unseen ($N = 64$):** 4 held-out active patterns $\times$ 16 distinct distractor draws.
+- **Rule A Dataset:** `research/lifelong_01/data/ssrl_pilot_t1_s101.json` (Canonical SHA-256: `00a21efad1dc07b826198d99b0b702aedddad57b6226f99301afbf16327fd0b7`)
+  - Seen ($N = 192$): 12 observed active patterns $\times$ 16 distinct distractor draws.
+  - Unseen ($N = 64$): 4 held-out active patterns $\times$ 16 distinct distractor draws.
+  - Training pool ($N = 384$): 12 observed active patterns $\times$ 32 distinct distractor draws.
+- **Rule B Dataset:** `research/lifelong_01/data/ssrl_pilot_t2_s101.json` (Canonical SHA-256: `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4`)
+  - Seen ($N = 192$): 12 observed active patterns $\times$ 16 distinct distractor draws.
+  - Unseen ($N = 64$): 4 held-out active patterns $\times$ 16 distinct distractor draws.
+  - Training pool ($N = 384$): 12 observed active patterns $\times$ 32 distinct distractor draws.
 - Total frozen evaluation records across both rules: $256 + 256 = 512$ examples.
 
 ---

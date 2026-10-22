@@ -246,12 +246,12 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 3. **Preserved Pilot Results Bundle:**
    - Single-rule pilot results bundle preserved in `evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip` (SHA-256 `9780d34cc30f7a0639ce981671bbc87d22b5c751e62c9e2178f6a7a315579f1b`).
    - Verified empirical findings: Gate $G\text{-LC}$ PASSED (Seen active patterns: 192/192 = 100.00%), held-out pattern generalization: 28/64 = 43.75%.
-4. **Rule B Dataset Generation on Kaggle (2026-10-22) [Reported]:**
-   - **Run ID:** `ssrl_gen_t2_r3nnlpez`
-   - **Remote Directory:** `/kaggle/working/ssrl_gen_t2_r3nnlpez`
-   - **Canonical SHA-256 Byte Hash:** `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4`
-   - **Evidence Bundle:** `/kaggle/working/ssrl_gen_t2_r3nnlpez/ssrl_t2_generated_bundle.zip`
-   - **Reported Outcome:** All 640 examples verified (384 train / 192 seen-eval / 64 held-out-eval), parity labels, masks, and pattern disjointness passed.
+4. **Rule B Dataset Generation on Kaggle & Local Verification (2026-10-22):**
+   - **Canonical SHA-256 Byte Hash:** `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4` (Verified on disk).
+   - **Dataset File:** `research/lifelong_01/data/ssrl_pilot_t2_s101.json` (388,102 bytes).
+   - **Manifest File:** `research/lifelong_01/data/ssrl_pilot_t2_s101_manifest.json` (435 bytes).
+   - **Evidence Bundle Archive:** `evidence/data_generation/ssrl_t2_generated_bundle.zip` (SHA-256 `59eaabc149f58d79ff4f157b83b9a98e9baa1dddad64ff67808128ca6f06e80f`).
+   - **Status:** **VERIFIED** on local workstation. All 640 examples verified: counts (384 train / 192 seen-eval / 64 held-out-eval), parity labels, masks, and pattern disjointness passed.
 5. **SSRL-02 Runner Implementation & Scaffolding Verification on Kaggle (2026-10-22) [Reported]:**
    - **Tested Commit:** `e4aef5042950a4329b465407f710edac72e452f2`
    - **Environment:** Remote Kaggle Notebook (CPU-only, no accelerator).
@@ -260,7 +260,7 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Reported Outcome:** 31 / 31 unit and regression tests passed in 5.461s with exit code 0 (researcher-reported terminal stream).
    - **Status & Caveat:** Reported only. The raw archive has not yet been downloaded to the local workstation or inspected independently. Transcript preserved in `evidence/migration_verification/README.md`.
    - **Scaffolding Scope:** Covers `seq_ab`, `fresh_b`, `freeze_after_a` arms, boundary Adam rebuild ($m=0, v=0, \text{step}=0$), shared minibatch schedule, and step 0/100/250/500 evaluations (`research/lifelong_01/run_ssrl_two_rule.py`, 401 lines, under 600-line limit).
-   - **Neural Compute Status:** Zero neural compute executed. Specification approval guard verified. Ready for Rule B dataset placement into repository.
+   - **Neural Compute Status:** Zero neural compute executed. Specification approval guard verified. Ready for execution once specification is formally approved.
 
 ---
 
@@ -276,10 +276,11 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 
 - [x] Verify standalone repository and workspace (`C:\Users\Vicky\Desktop\lifelong-learning`, `main`).
 - [x] Record migration verification outcome (20/20 unit tests passed on Kaggle, exit code 0, commit `3747300a`).
-- [x] Record SSRL-02 expanded test suite outcome (26/26 tests passed on Kaggle, exit code 0, commit `2484408a`).
-- [x] Record Rule B dataset remote generation outcome (SHA-256 `27e813e7...`, run `ssrl_gen_t2_r3nnlpez`).
+- [x] Record SSRL-02 expanded test suite outcome (31/31 tests passed on Kaggle, exit code 0, commit `e4aef50`).
+- [x] Retrieve and verify Rule B dataset on disk (SHA-256 `27e813e7...`, 640 examples).
+- [x] Preserve Rule B data generation bundle (`evidence/data_generation/ssrl_t2_generated_bundle.zip`).
 - [x] Preserve pilot execution results bundle (`evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip`).
-- [ ] Retrieve local copy of migration and generation verification archives.
+- [ ] Retrieve local copy of remote test verification archives.
 - [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (31 tests).
 - [ ] Submit SSRL-02 specification for formal human review before any compute dispatch.
 

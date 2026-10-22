@@ -1,0 +1,21 @@
+{
+  "d": 16,
+  "dataset_filename": "ssrl_pilot_t2_s101.json",
+  "dataset_sha256": "27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4",
+  "eval_seen_examples": 192,
+  "eval_unseen_examples": 64,
+  "k": 4,
+  "partition_seed": 43,
+  "phase": "two_rule_diagnostic",
+  "rule_id": 2,
+  "rule_indices": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "seed": 101,
+  "study_id": "SSRL-02",
+  "total_examples": 640,
+  "train_examples": 384
+}
