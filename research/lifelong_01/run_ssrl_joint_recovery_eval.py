@@ -153,7 +153,7 @@ def run_recovery_evaluation(
         raise ValueError(f"Probe dataset hash mismatch: expected {sha256_probe}, got {obs_probe_sha}")
     with open(probe_dataset_path, "r", encoding="utf-8") as pf:
         probe_json = json.load(pf)
-    validate_counterfactual_probe_contract(probe_json)
+    validate_counterfactual_probe_contract(probe_json, dataset_a, dataset_b)
 
     # 3. Population Evaluation under 60s ceiling
     t_pop_start = time.monotonic()
