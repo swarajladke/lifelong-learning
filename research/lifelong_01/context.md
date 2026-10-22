@@ -260,7 +260,13 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Reported Outcome:** 31 / 31 unit and regression tests passed in 5.461s with exit code 0 (researcher-reported terminal stream).
    - **Status & Caveat:** Reported only. The raw archive has not yet been downloaded to the local workstation or inspected independently. Transcript preserved in `evidence/migration_verification/README.md`.
    - **Scaffolding Scope:** Covers `seq_ab`, `fresh_b`, `freeze_after_a` arms, boundary Adam rebuild ($m=0, v=0, \text{step}=0$), shared minibatch schedule, and step 0/100/250/500 evaluations (`research/lifelong_01/run_ssrl_two_rule.py`, 401 lines, under 600-line limit).
-   - **Neural Compute Status:** Zero neural compute executed. Specification approval guard verified. Ready for execution once specification is formally approved.
+   - **Neural Compute Status:** Zero neural compute executed. Specification approval guard verified.
+6. **SSRL-02 Formal Approval & Automated Publishing Utility (2026-10-22):**
+   - **Authorization:** Single exploratory seed 101 run formally authorized by human researcher.
+   - **Approval Change:** Applied minimum approval update: `gate_approval_status: "APPROVED"` in `APPROVED_TWO_RULE_CONFIG`.
+   - **Contract Validation Alignment:** Aligned dataset loader configs so production contract validation explicitly verifies both Rule A (`00a21efad1...`, study `SSRL-01`) and Rule B (`27e813e7...`, study `SSRL-02`).
+   - **Automated Publishing:** Implemented `research/lifelong_01/publish_results.py` targeting dedicated `experiment-results` branch (`runs/ssrl_02/<unique_run_id>/`), enforcing 10 MB ceiling, zero credentials in commits, isolated clone workspace, and non-destructive branch initialization.
+   - **Model-Free Tests:** Expanded to 34 unit tests in `research/lifelong_01/test_ssrl_model_free.py`.
 
 ---
 
@@ -281,6 +287,7 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 - [x] Preserve Rule B data generation bundle (`evidence/data_generation/ssrl_t2_generated_bundle.zip`).
 - [x] Preserve pilot execution results bundle (`evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip`).
 - [ ] Retrieve local copy of remote test verification archives.
-- [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (31 tests).
-- [ ] Submit SSRL-02 specification for formal human review before any compute dispatch.
+- [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (34 tests).
+- [x] Record formal human approval for SSRL-02 execution (Seed 101).
+- [x] Author automated publishing utility for `experiment-results` branch.
 

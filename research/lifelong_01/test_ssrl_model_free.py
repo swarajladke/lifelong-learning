@@ -33,6 +33,9 @@ Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 29. Two-rule specification approval guard: unapproved status rejected before model construction or data processing.
 30. Two-rule failure diagnostics persistence: writes failure_diagnostics.json on early specification rejection.
 31. Two-rule step 0 transfer delta semantics: compares seq_ab at t1 against fresh_b at t0 on Rule B evaluation population.
+32. Publish results artifact size ceiling: enforces 10 MB limit before Git staging.
+33. Publish results forbidden files guard: rejects .pt, .ckpt, and credential files.
+34. Publish results branch guard: strictly rejects 'main' branch targets.
 """
 
 from __future__ import annotations
@@ -86,6 +89,12 @@ from research.lifelong_01.run_ssrl_two_rule import (
     build_minibatch_schedule,
     verify_run_specification_approval as verify_two_rule_approval,
     run_two_rule_study,
+)
+from research.lifelong_01.publish_results import (
+    calculate_and_verify_run_size,
+    verify_no_forbidden_files,
+    publish_run_artifacts,
+    MAX_ALLOWED_RUN_BYTES,
 )
 
 
@@ -920,6 +929,57 @@ class TestSSRLModelFree(unittest.TestCase):
         self.assertEqual(transfer_step0["rule_id"], 2)
         # 10/10 (100%) vs 6/10 (60%) -> delta = +40.0 percentage points
         self.assertAlmostEqual(transfer_step0["transfer_delta_pct"], 40.0)
+
+    def test_publish_size_ceiling_enforced(self):
+        """
+        Tests that calculate_and_verify_run_size raises ValueError
+        when run artifacts exceed the 10 MB ceiling.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            large_file = os.path.join(tmpdir, "large_artifact.json")
+            with open(large_file, "wb") as f:
+                f.seek(MAX_ALLOWED_RUN_BYTES + 1024)
+                f.write(b"0")
+            with self.assertRaises(ValueError) as ctx:
+                calculate_and_verify_run_size(tmpdir)
+            self.assertIn("exceeds the 10 MB ceiling", str(ctx.exception))
+
+    def test_publish_forbidden_checkpoints_rejected(self):
+        """
+        Tests that verify_no_forbidden_files rejects .pt, .ckpt, and credential files.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_file = os.path.join(tmpdir, "model_weights.pt")
+            with open(ckpt_file, "w") as f:
+                f.write("dummy")
+            with self.assertRaises(ValueError) as ctx:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("Forbidden checkpoint file", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            secret_file = os.path.join(tmpdir, "github_token.txt")
+            with open(secret_file, "w") as f:
+                f.write("secret")
+            with self.assertRaises(ValueError) as ctx:
+                verify_no_forbidden_files(tmpdir)
+            self.assertIn("Forbidden credential-like filename", str(ctx.exception))
+
+    def test_publish_branch_guard_rejects_main(self):
+        """
+        Tests that publish_run_artifacts asserts target_branch != 'main',
+        strictly preventing accidental push to the main code branch.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(AssertionError) as ctx:
+                publish_run_artifacts(
+                    run_dir=tmpdir,
+                    run_id="test_run",
+                    repo_url="https://dummy.git",
+                    source_commit="0"*40,
+                    experiment_exit_code=0,
+                    target_branch="main",
+                )
+            self.assertIn("strictly forbidden", str(ctx.exception))
 
 
 if __name__ == "__main__":

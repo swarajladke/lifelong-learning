@@ -75,7 +75,7 @@ APPROVED_TWO_RULE_CONFIG: Dict[str, Any] = {
     "eval_seen_size": 192,
     "eval_unseen_size": 64,
     "gate_g_lc_threshold": 0.90,
-    "gate_approval_status": "PROPOSED_PENDING_APPROVAL",
+    "gate_approval_status": "APPROVED",
     "wall_clock_ceiling_training_seconds": 180.0,
     "wall_clock_ceiling_eval_seconds": 60.0,
 }
@@ -195,8 +195,22 @@ def run_two_rule_study(
         diagnostics["approval_status"] = "APPROVED"
 
         # 2. Dataset Assertions
-        config_a = {**config, "rule_id": config["rule_a_id"], "rule_indices": config["rule_a_indices"], "partition_seed": config["data_distractor_seed_a"], "phase": "two_rule_diagnostic"}
-        config_b = {**config, "rule_id": config["rule_b_id"], "rule_indices": config["rule_b_indices"], "partition_seed": config["data_distractor_seed_b"], "phase": "two_rule_diagnostic"}
+        config_a = {
+            **config,
+            "study_id": "SSRL-01",
+            "phase": "learnability_pilot",
+            "rule_id": config["rule_a_id"],
+            "rule_indices": config["rule_a_indices"],
+            "partition_seed": config["data_distractor_seed_a"],
+        }
+        config_b = {
+            **config,
+            "study_id": "SSRL-02",
+            "phase": "two_rule_diagnostic",
+            "rule_id": config["rule_b_id"],
+            "rule_indices": config["rule_b_indices"],
+            "partition_seed": config["data_distractor_seed_b"],
+        }
 
         dataset_a = load_and_verify_dataset(dataset_a_path, expected_sha256=expected_sha_a, approved_config=config_a)
         dataset_b = load_and_verify_dataset(dataset_b_path, expected_sha256=expected_sha_b, approved_config=config_b)
