@@ -28,13 +28,20 @@ MAX_ALLOWED_RUN_BYTES: int = 10 * 1024 * 1024  # 10 MB ceiling
 FORBIDDEN_EXTENSIONS = {".pth", ".bin", ".ckpt", ".pkl"}
 FORBIDDEN_SUBSTRINGS = {"id_rsa", "id_ed25519", ".env", "token", "secret", "credential"}
 
-# Narrow allowlist strictly for SSRL-02 size-bounded model state checkpoints
+# Narrow allowlist strictly for SSRL size-bounded model state checkpoints
 ALLOWED_CHECKPOINT_FILENAMES = {
+    # SSRL-02 sequential checkpoints
     "checkpoint_t0_init.pt",
     "checkpoint_t1_post_a.pt",
     "checkpoint_t2_seq_ab.pt",
     "checkpoint_t2_fresh_b.pt",
     "checkpoint_t2_freeze_a.pt",
+    # SSRL-03 joint reference checkpoints
+    "checkpoint_joint_t0_init.pt",
+    "checkpoint_joint_step500.pt",
+    "checkpoint_joint_step1000.pt",
+    "checkpoint_joint_step2000.pt",
+    "checkpoint_joint_step2500_final.pt",
 }
 MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 

@@ -83,4 +83,57 @@ The following parameters and structures are specific design choices for the **SS
 
 1. **Quarantined AGNIS Modules:** Migration to this standalone repository conveys **zero authorization** to revive, import, or execute legacy quarantined AGNIS modules (`agnis_*.py`) or unapproved historical baselines.
 2. **Factual Editing Isolation:** Factual editing methods (GPT-2 Layer 1 `c_proj` localized editing, S0-16) remain entirely within the upstream repository and have no standing here.
-3. **Execution Separation:** Heavy training, sweeps, and multi-seed sequences must run on remote environments (e.g. Kaggle GPU) under clean checkouts. Local execution is restricted to authoring, documentation, git management, and model-free unit tests.
+3. **Heavy Compute Separation:** Large sweeps, unbounded multi-seed campaigns, and heavy GPU workloads belong on remote accelerator environments (e.g., Kaggle GPU) under clean, pinned checkouts. Local execution is governed strictly by Section 4.
+
+---
+
+## 4. Policy: Bounded Local Execution
+
+*Clarification:* Local execution is not categorically forbidden for this project. Small workloads may be executed locally when explicitly authorized by the researcher.
+
+### 4.1 Permitted Local Work
+The agent may execute locally:
+- Model-free unit and regression tests (CPU-only, lightweight);
+- Dataset validation, manifest generation, and result-analysis scripts;
+- Small CPU-only dataset generation or neural experiments that the researcher has explicitly authorized.
+
+### 4.2 Authorization Boundaries
+- Permission to run unit or regression tests does **not** authorize training.
+- Permission for a single experiment does **not** authorize sweeps, additional seeds, hyperparameter tuning, automated retries, or follow-up experiments.
+- Prior to executing any local neural compute, the agent must identify:
+  1. The approved configuration or specification;
+  2. The exact source commit revision;
+  3. The pinned input datasets and canonical SHA-256 hashes;
+  4. Explicit step and sample exposure budgets;
+  5. The wall-clock timeout ceiling.
+  If any of these parameters are missing, unpinned, or ambiguous, the agent must stop and ask before proceeding.
+
+### 4.3 Resource and Timeout Limits
+- Local execution must remain strictly CPU-only unless separate GPU authorization is explicitly granted.
+- Local runs must operate under the approved experiment's explicit resource limits and monotonic timeout ceilings (halting execution if ceilings are exceeded).
+- If no explicit limits are approved, the agent must propose them and obtain confirmation before running.
+- The agent must never autonomously decide that an arbitrary workload is "small" and run it without authorization.
+
+### 4.4 Environment and Filesystem Protection
+- No package installations, upgrades, uninstalls, administrator actions, or global configuration alterations may be executed without separate approval.
+- Every run must reserve a unique execution directory (`evidence/runs/<run_id>/`) and refuse execution if the destination already exists. Prior evidence artifacts must never be overwritten.
+- Local operations within this repository must never modify or pollute the original `Neural-Networks` worktrees.
+
+### 4.5 Invariant Scientific Safeguards
+All scientific safeguards in Section 1 apply with equal force to local runs:
+- Pinned datasets must be hash-verified before compute;
+- Thresholds and reference baselines are immutable;
+- Pre-flight tests must execute and pass prior to model construction;
+- Full provenance, raw per-unit outcome records, and failure diagnostics must be serialized;
+- Gate failures or timeout breaches immediately halt downstream execution with nonzero exit codes;
+- No silent threshold changes, replacement seeds, or automated retries.
+
+### 4.6 Accurate Provenance and Execution Environment Labeling
+- Every results artifact and summary report must explicitly record its execution environment (e.g., `local_workstation` vs. `kaggle_remote`).
+- Artifacts must log the actual host hardware, OS, platform flags, framework versions, commit SHA, and git working-tree dirty status.
+- Local execution is not inherently invalid, and matching predictions across environments does not by itself establish tensor equality.
+
+### 4.7 Historical Clarification
+- The researcher explicitly authorized the local SSRL-02 exact-protocol replay `ssrl_02_replay_eff8aa50`.
+- Execution of `ssrl_02_replay_eff8aa50` on the local workstation is classified as an authorized bounded run, not an authorization violation.
+- Its authentic local provenance, environment records, captured checkpoints, and probe results are preserved in place.

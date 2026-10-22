@@ -19,11 +19,18 @@ import torch
 
 
 ALLOWED_CHECKPOINT_FILENAMES = {
+    # SSRL-02 sequential checkpoints
     "checkpoint_t0_init.pt",
     "checkpoint_t1_post_a.pt",
     "checkpoint_t2_seq_ab.pt",
     "checkpoint_t2_fresh_b.pt",
     "checkpoint_t2_freeze_a.pt",
+    # SSRL-03 joint reference checkpoints
+    "checkpoint_joint_t0_init.pt",
+    "checkpoint_joint_step500.pt",
+    "checkpoint_joint_step1000.pt",
+    "checkpoint_joint_step2000.pt",
+    "checkpoint_joint_step2500_final.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint

@@ -51,6 +51,7 @@ import time
 import copy
 import tempfile
 import unittest
+import unittest.mock
 import json
 import hashlib
 import torch
@@ -119,6 +120,17 @@ from research.lifelong_01.ssrl_checkpoints import (
 from research.lifelong_01.ssrl_reproduction_check import (
     verify_aligned_reproduction,
     ReproductionDivergenceError,
+)
+from research.lifelong_01.ssrl_model import SSRLInstructionMLP
+from research.lifelong_01.run_ssrl_joint_reference import (
+    interleave_minibatch_schedules,
+    load_and_verify_initial_model,
+    CheckpointVerificationError,
+    verify_joint_specification_approval,
+    EXPECTED_T0_FINGERPRINT,
+    PROPOSED_JOINT_REFERENCE_CONFIG,
+    APPROVED_JOINT_REFERENCE_CONFIG,
+    run_joint_reference_study,
 )
 
 
@@ -1269,6 +1281,293 @@ class TestSSRLModelFree(unittest.TestCase):
             with self.assertRaises(ReproductionDivergenceError) as ctx:
                 verify_aligned_reproduction(replay_divergent, ref_path)
             self.assertIn("Prediction divergence", str(ctx.exception))
+
+    def test_joint_reference_schedule_interleaving_and_order(self):
+        """
+        Tests that interleave_minibatch_schedules produces exactly 2,500 batches
+        (2,000 from Rule A, 500 from Rule B) with a 4:1 cyclic ratio, preserving
+        exact within-rule batch order without drops or duplications.
+        """
+        # Hand-constructed dummy batches
+        sched_a = [[{"id": f"a_{i}_{b}"} for b in range(16)] for i in range(2000)]
+        sched_b = [[{"id": f"b_{i}_{b}"} for b in range(16)] for i in range(500)]
+
+        interleaved = interleave_minibatch_schedules(sched_a, sched_b, ratio_a=4, ratio_b=1)
+        self.assertEqual(len(interleaved), 2500)
+
+        count_a = sum(1 for tag, rid, b in interleaved if tag == "rule_a" and rid == 1)
+        count_b = sum(1 for tag, rid, b in interleaved if tag == "rule_b" and rid == 2)
+        self.assertEqual(count_a, 2000)
+        self.assertEqual(count_b, 500)
+
+        # Check 4:1 cycle pattern
+        for cycle_idx in range(500):
+            block = interleaved[cycle_idx * 5 : (cycle_idx + 1) * 5]
+            for k in range(4):
+                self.assertEqual(block[k][0], "rule_a")
+                self.assertEqual(block[k][1], 1)
+            self.assertEqual(block[4][0], "rule_b")
+            self.assertEqual(block[4][1], 2)
+
+        # Check within-rule sequence order preserved
+        extracted_a = [b for tag, _, b in interleaved if tag == "rule_a"]
+        extracted_b = [b for tag, _, b in interleaved if tag == "rule_b"]
+        self.assertEqual(extracted_a, sched_a)
+        self.assertEqual(extracted_b, sched_b)
+
+    def test_joint_reference_approval_guard_and_directory_reservation(self):
+        """
+        Tests that joint reference runner enforces approval guards, directory reservation,
+        and strict checkpoint allowlist rules.
+        """
+        # 1. Production configuration is APPROVED
+        self.assertEqual(PROPOSED_JOINT_REFERENCE_CONFIG["gate_approval_status"], "APPROVED")
+        verify_joint_specification_approval(PROPOSED_JOINT_REFERENCE_CONFIG)
+
+        # 2. An unapproved configuration is rejected
+        cfg_unapproved = copy.deepcopy(PROPOSED_JOINT_REFERENCE_CONFIG)
+        cfg_unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError) as ctx:
+            verify_joint_specification_approval(cfg_unapproved)
+        self.assertIn("PROPOSED_PENDING_APPROVAL", str(ctx.exception))
+
+        # 3. Directory reservation prevents overwrite
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "joint_run_dir")
+            r1 = reserve_run_directory(run_dir)
+            self.assertTrue(os.path.isdir(r1))
+            with self.assertRaises(FileExistsError):
+                reserve_run_directory(run_dir)
+
+    def test_joint_reference_dataset_validation_enforces_rule_contracts(self):
+        """
+        Tests that load_and_verify_dataset enforces Rule A (rule_id 1, indices [0,1,2,3])
+        and Rule B (rule_id 2, indices [4,5,6,7]) semantics via approved_config, and raises
+        PilotDatasetContractError when a rule mismatch is injected.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        with open(dataset_a_path, "rb") as fa:
+            sha_a = hashlib.sha256(fa.read()).hexdigest()
+
+        # Valid Rule A config passes
+        cfg_a = {
+            **PROPOSED_JOINT_REFERENCE_CONFIG,
+            "study_id": "SSRL-01",
+            "phase": "learnability_pilot",
+            "rule_id": 1,
+            "rule_indices": [0, 1, 2, 3],
+            "partition_seed": 42,
+        }
+        da = load_and_verify_dataset(dataset_a_path, expected_sha256=sha_a, approved_config=cfg_a)
+        self.assertIsInstance(da, dict)
+
+        # Mismatched rule_id raises PilotDatasetContractError
+        cfg_bad_rule = copy.deepcopy(cfg_a)
+        cfg_bad_rule["rule_id"] = 2
+        with self.assertRaises(PilotDatasetContractError) as ctx:
+            load_and_verify_dataset(dataset_a_path, expected_sha256=sha_a, approved_config=cfg_bad_rule)
+        self.assertIn("rule_id mismatch", str(ctx.exception))
+
+    def test_counterfactual_probe_malformed_opposing_parity_rejected(self):
+        """
+        Tests that validate_counterfactual_probe_contract strictly rejects probe fixtures
+        with malformed opposing parity (e.g. features=[1]*16, where parity under both masks
+        is identical), as well as label/parity mismatches.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        with open(dataset_a_path, "r", encoding="utf-8") as fa:
+            da = json.load(fa)
+        with open(dataset_b_path, "r", encoding="utf-8") as fb:
+            db = json.load(fb)
+
+        # Generate valid baseline probe
+        valid_probe = generate_counterfactual_probe_dataset(da, db, seed=3030)
+        self.assertTrue(validate_counterfactual_probe_contract(valid_probe, da, db))
+
+        # Case 1: All-ones feature vector has parity +1 under both masks (pa=[1]*4, pb=[1]*4).
+        # Injecting an all-ones vector violates opposing parity constraint.
+        malformed_opposing = copy.deepcopy(valid_probe)
+        malformed_opposing["probe_examples"][0]["features"] = [1] * 16
+        with self.assertRaises(ValueError) as ctx1:
+            validate_counterfactual_probe_contract(malformed_opposing, da, db)
+        self.assertIn("violates opposing parity constraint", str(ctx1.exception))
+
+        # Case 2: Label fields inverted / mismatched from recomputed parity
+        malformed_labels = copy.deepcopy(valid_probe)
+        ex0 = malformed_labels["probe_examples"][0]
+        ex0["target_class_a"] = 1 - ex0["target_class_a"]
+        with self.assertRaises(ValueError) as ctx2:
+            validate_counterfactual_probe_contract(malformed_labels, da, db)
+        self.assertIn("label fields do not match recomputed parity", str(ctx2.exception))
+
+
+class TestSSRLCPUIntegration(unittest.TestCase):
+    """
+    CPU integration test suite for SSRL components requiring model construction (SSRLInstructionMLP)
+    or neural forward pass execution. Distinct from model-free verification.
+    """
+
+    def test_joint_reference_initialization_checkpoint_validation(self):
+        """
+        Tests that load_and_verify_initial_model verifies tensor fingerprint,
+        rejects non-existent files, and detects corrupted/mismatched checkpoint weights.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ckpt_path = os.path.join(tmpdir, "checkpoint_t0_init.pt")
+            model_orig = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            torch.save(model_orig.state_dict(), ckpt_path)
+
+            # 1. Matching fingerprint loads cleanly
+            valid_fp = compute_tensor_fingerprint_from_state_dict(model_orig.state_dict())
+            loaded_model = load_and_verify_initial_model(ckpt_path, valid_fp, device=torch.device("cpu"))
+            self.assertIsInstance(loaded_model, SSRLInstructionMLP)
+
+            # 2. Mismatched fingerprint raises CheckpointVerificationError
+            wrong_fp = "0000000000000000000000000000000000000000000000000000000000000000"
+            with self.assertRaises(CheckpointVerificationError) as ctx:
+                load_and_verify_initial_model(ckpt_path, wrong_fp, device=torch.device("cpu"))
+            self.assertIn("does not match expected fingerprint", str(ctx.exception))
+
+            # 3. Missing file raises FileNotFoundError
+            with self.assertRaises(FileNotFoundError):
+                load_and_verify_initial_model(os.path.join(tmpdir, "missing.pt"), valid_fp, device=torch.device("cpu"))
+
+    def test_joint_reference_evaluation_only_probe_isolation(self):
+        """
+        Tests that probe evaluation produces zero gradient or parameter mutations,
+        and that probe evaluation runs strictly under evaluation mode with a mathematically
+        valid opposing-parity fixture.
+        """
+        model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+        orig_fp = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            probe_path = os.path.join(tmpdir, "probe.json")
+            # Valid opposing-parity fixture:
+            # Rule A [0..3]: [1, 1, 1, 1] -> parity +1 -> target_class_a = 1
+            # Rule B [4..7]: [-1, 1, 1, 1] -> parity -1 -> target_class_b = 0
+            valid_x = [1] * 16
+            valid_x[4] = -1
+            probe_data = {
+                "metadata": {"seed": 3030},
+                "probe_examples": [
+                    {
+                        "probe_id": 1,
+                        "features": valid_x,
+                        "target_class_a": 1,
+                        "target_class_b": 0,
+                        "stratum": "seen_seen",
+                        "is_held_out_a": False,
+                        "is_held_out_b": False
+                    }
+                ]
+            }
+            with open(probe_path, "w", encoding="utf-8") as f:
+                json.dump(probe_data, f)
+
+            res = evaluate_counterfactual_probe(model, probe_data["probe_examples"], device=torch.device("cpu"))
+            self.assertEqual(res["overall_metrics"]["total_pairs"], 1)
+
+            # Verify model weights were untouched and have no accumulated gradients
+            post_fp = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+            self.assertEqual(orig_fp, post_fp)
+            for p in model.parameters():
+                self.assertIsNone(p.grad)
+
+    def test_joint_reference_failure_diagnostics_persistence_on_error(self):
+        """
+        Tests that run_joint_reference_study catches execution failures, persists
+        failure diagnostics with actual status ('FAILED'), work counters, partial records,
+        and enforces non-overwrite behavior on failure records and run directories.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_failed_test")
+            dest_json = os.path.join(tmpdir, "results.json")
+            init_ckpt = os.path.join(tmpdir, "checkpoint_t0_init.pt")
+
+            # Create test initial checkpoint
+            test_model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            test_fp = compute_tensor_fingerprint_from_state_dict(test_model.state_dict())
+            torch.save(test_model.state_dict(), init_ckpt)
+
+            # Isolated copied config marked APPROVED for this test
+            cfg = copy.deepcopy(PROPOSED_JOINT_REFERENCE_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["expected_t0_fingerprint"] = test_fp
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 1
+            cfg["step_budget_total"] = 5
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+
+            probe_path = os.path.join(tmpdir, "probe.json")
+            valid_x = [1] * 16
+            valid_x[4] = -1
+            with open(probe_path, "w", encoding="utf-8") as pf:
+                json.dump({
+                    "metadata": {"seed": 3030},
+                    "probe_examples": [
+                        {"probe_id": 1, "features": valid_x, "target_class_a": 1, "target_class_b": 0, "stratum": "seen_seen"}
+                    ]
+                }, pf)
+
+            # Inject a controlled failure into forward pass during step 2
+            original_forward = SSRLInstructionMLP.forward
+            call_count = [0]
+            def faulty_forward(self_model, x):
+                call_count[0] += 1
+                if call_count[0] >= 2:
+                    raise RuntimeError("Injected simulated compute fault during joint training")
+                return original_forward(self_model, x)
+
+            with unittest.mock.patch.object(SSRLInstructionMLP, "forward", faulty_forward):
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_joint_reference_study(
+                        dataset_a_path=dataset_a_path,
+                        sha256_a=sha_a,
+                        dataset_b_path=dataset_b_path,
+                        sha256_b=sha_b,
+                        destination=dest_json,
+                        run_dir=run_dir,
+                        init_checkpoint_path=init_ckpt,
+                        probe_dataset_path=probe_path,
+                        config=cfg
+                    )
+                self.assertIn("Injected simulated compute fault", str(ctx.exception))
+
+            # 1. Verify failure diagnostics file was persisted
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+            self.assertTrue(os.path.isfile(diag_file))
+
+            with open(diag_file, "r", encoding="utf-8") as df:
+                failure_diag = json.load(df)
+
+            # 2. Verify status and error fields
+            self.assertEqual(failure_diag["status"], "FAILED")
+            self.assertEqual(failure_diag["error_type"], "RuntimeError")
+            self.assertIn("Injected simulated compute fault", failure_diag["error_message"])
+
+            # 3. Verify work counters reflect completed steps before failure
+            self.assertGreaterEqual(failure_diag["exposures"]["total_presentations"], 16)
+            self.assertGreaterEqual(failure_diag["exposures"]["total_optimizer_steps"], 1)
+
+            # 4. Verify existing partial records / initial milestone checkpoint recorded
+            self.assertIn("checkpoint_joint_t0_init", failure_diag["checkpoints"])
+            init_saved = os.path.join(run_dir, "checkpoint_joint_t0_init.pt")
+            self.assertTrue(os.path.isfile(init_saved))
+
+            # 5. Verify non-overwrite behavior
+            with self.assertRaises(FileExistsError):
+                atomic_write_json(failure_diag, diag_file, refuse_overwrite=True)
+
+            with self.assertRaises(FileExistsError):
+                reserve_run_directory(run_dir)
 
 
 if __name__ == "__main__":

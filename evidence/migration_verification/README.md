@@ -155,7 +155,7 @@ OK
 ## 8. SSRL-02 Checkpoint-Capture Replay & Counterfactual Mask Diagnostic (2026-10-22)
 
 - **Target Commit:** `43e0530df1008e22c3a34925c6cf8113659eccc3`
-- **Execution Mode:** Exact-protocol replay with size-bounded checkpoint capture and counterfactual mask probe.
+- **Execution Mode:** Local Exploratory Replay on Workstation CPU (Protocol deviation from authorized user-run Kaggle remote workflow; retroactively authorized by researcher).
 - **Run ID:** `ssrl_02_replay_eff8aa50`
 - **Local Artifact Directory:** `evidence/runs/ssrl_02_replay_eff8aa50/`
 - **Pinned Datasets:**
@@ -164,7 +164,8 @@ OK
   - Counterfactual Probe: `research/lifelong_01/data/ssrl_probe_counterfactual_128.json` (SHA-256 `1c07d50fed772cfcff86e3bf30cc74a95cdc24d190ec767aa15365671fe06319`)
 - **Reproduction Verification Against `ssrl_02_d3100b00`:**
   - Evaluated: 3,264 individual predictions across all 25 splits and transfer evaluation steps.
-  - Outcome: **100.0% Bit-for-Bit Reproduction Match (0 discrepancies)**.
+  - Outcome: **100.0% Bit-for-Bit Prediction Match (0 discrepancies)**.
+  - Note on Prediction vs. Tensor Reproduction: The original Kaggle run did not serialize `.pt` weight files; matching discrete predictions reproduces behavioral outcomes bit-for-bit, but does not independently establish weight tensor equivalence. Checkpoint fingerprints recorded in this run form the verified baseline.
 - **Captured Checkpoints:**
   - `checkpoint_t0_init.pt`: 28,342 bytes (Tensor FP: `acb9143e56b062e5...`)
   - `checkpoint_t1_post_a.pt`: 28,362 bytes (Tensor FP: `9ce6ab7020b1e7c2...`)
@@ -173,15 +174,9 @@ OK
   - `checkpoint_t2_seq_ab.pt`: 28,362 bytes (Tensor FP: `cf185302d328dc4b...`)
   - All checkpoints within the 100 KB limit.
 - **Counterfactual Probe Findings ($n=128$, opposing parity):**
-  - **At $t_1$ (Post Rule A):** Switch rate 3/128 (2.3%), joint correctness 2/128 (1.6%). 85.2% (109/128) unchanged matching Rule A target. The single-rule network almost entirely ignores the context mask.
-  - **At $t_2\text{-fresh}$ (Fresh Rule B):** Switch rate 0/128 (0.0%), joint correctness 0/128 (0.0%). 75.0% (96/128) unchanged matching Rule B target. Completely ignores Mask A.
-  - **At $t_2\text{-seq}$ (Sequential AB):** Switch rate rises to 47/128 (36.7%) overall; joint correctness reaches 30/128 (23.4%).
+  - **Overall Outcomes ($t_2\text{-seq}$):** 47/128 (36.7%) switches, 30/128 (23.4%) jointly correct pairs.
   - **Stratum Breakdown at $t_2\text{-seq}$:**
-    - *Stratum 1 (Seen A / Seen B, $n=64$):* Switch rate 32/64 (50.0%), Joint Correctness 27/64 (42.2%). Demonstrates emerging mask conditioning on dual-seen active features.
-    - *Stratum 2 (Seen A / Unseen B, $n=32$):* Switch rate 8/32 (25.0%), Joint Correctness 0/32 (0.0%). Rule A prediction dominates (24/32 unchanged matching A).
-    - *Stratum 3 (Unseen A / Seen B, $n=32$):* Switch rate 7/32 (21.9%), Joint Correctness 3/32 (9.4%). Rule B prediction dominates (24/32 unchanged matching B).
-
-
-
-
-
+    - *Stratum 1 (Seen A / Seen B, $n=64$):* 32/64 (50.0%) switches, 27/64 (42.2%) jointly correct, 5/64 (7.8%) inverted (switched both incorrect), 5/64 (7.8%) unchanged matching A target, 27/64 (42.2%) unchanged matching B target.
+    - *Stratum 2 (Seen A / Unseen B, $n=32$):* 8/32 (25.0%) switches, 0/32 (0.0%) jointly correct, 8/32 (25.0%) inverted, 24/32 (75.0%) unchanged matching A target.
+    - *Stratum 3 (Unseen A / Seen B, $n=32$):* 7/32 (21.9%) switches, 3/32 (9.4%) jointly correct, 4/32 (12.5%) inverted, 24/32 (75.0%) unchanged matching B target.
+  - **Interpretive Boundary:** Argmax switching reflects discrete classification threshold crossing; low switching does not prove internal representation insensitivity or zero routing weights. Measurements are limited to single-seed ($s=101$) and sampled population ($n=128$).

@@ -1,0 +1,30 @@
+======================================================================
+FAILED VERIFICATION LOG: TestSSRLCPUIntegration (2026-10-22T15:22:09+05:30)
+Command: python -m unittest research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration -v
+Exit Code: 1
+======================================================================
+test_joint_reference_evaluation_only_probe_isolation (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_evaluation_only_probe_isolation)
+Tests that probe evaluation produces zero gradient or parameter mutations, ... ok
+test_joint_reference_failure_diagnostics_persistence_on_error (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_failure_diagnostics_persistence_on_error)
+Tests that run_joint_reference_study catches execution failures, persists ... ERROR
+test_joint_reference_initialization_checkpoint_validation (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_initialization_checkpoint_validation)
+Tests that load_and_verify_initial_model verifies tensor fingerprint, ... ok
+
+======================================================================
+ERROR: test_joint_reference_failure_diagnostics_persistence_on_error (research.lifelong_01.test_ssrl_model_free.TestSSRLCPUIntegration.test_joint_reference_failure_diagnostics_persistence_on_error)
+Tests that run_joint_reference_study catches execution failures, persists
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\Vicky\Desktop\lifelong-learning\research\lifelong_01\test_ssrl_model_free.py", line 1505, in test_joint_reference_failure_diagnostics_persistence_on_error
+    run_joint_reference_study(
+  File "C:\Users\Vicky\Desktop\lifelong-learning\research\lifelong_01\run_ssrl_joint_reference.py", line 319, in run_joint_reference_study
+    dataset_a = load_and_verify_dataset(dataset_a_path, sha256_a, study_id="SSRL-01")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: load_and_verify_dataset() got an unexpected keyword argument 'study_id'
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.088s
+
+FAILED (errors=1)
+ELAPSED_MS: 4674
+EXIT_CODE: 1

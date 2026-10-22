@@ -287,10 +287,11 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 
 9. **SSRL-02 Replay Execution, Checkpoint Capture & Counterfactual Probe Evaluation (2026-10-22):**
    - **Run ID:** `ssrl_02_replay_eff8aa50`
+   - **Execution Mode:** Local Exploratory Replay (Workstation CPU; protocol deviation from user-run Kaggle workflow, retroactively authorized by researcher).
    - **Executing Commit:** `43e0530df1008e22c3a34925c6cf8113659eccc3`
-   - **Reproduction Verification:** 3264 / 3264 predictions match bit-for-bit against `ssrl_02_d3100b00` (zero discrepancies).
+   - **Reproduction Verification:** 3264 / 3264 predictions match bit-for-bit against `ssrl_02_d3100b00` (0 discrepancies). Note: matching discrete predictions does not independently establish weight tensor equivalence, as original run did not serialize weights to disk.
    - **Checkpoints Captured:** 5 size-bounded checkpoints (`checkpoint_t0_init.pt`, `checkpoint_t1_post_a.pt`, `checkpoint_t2_seq_ab.pt`, `checkpoint_t2_fresh_b.pt`, `checkpoint_t2_freeze_a.pt`), all < 100 KB limit.
-   - **Counterfactual Probe Findings:** 128 vectors evaluated under both masks with opposing targets. Proved single-rule models ($t_1$ and $t_2\text{-fresh}$) ignore context mask (switch rate $\le 2.3\%$). Sequential arm ($t_2\text{-seq}$) exhibits emerging mask responsiveness (switch rate 36.7% overall, 50.0% in Stratum 1: seen/seen with 42.2% joint correctness). Full evidence in `evidence/runs/ssrl_02_replay_eff8aa50/`.
+   - **Counterfactual Probe Findings ($n=128$, opposing parity):** In sequential arm ($t_2\text{-seq}$), overall switch count is 47/128 (36.7%) and 30/128 (23.4%) pairs are jointly correct. In Stratum 1 (seen/seen, $n=64$), 32/64 (50.0%) switch, 27/64 (42.2%) are jointly correct, and 5/64 (7.8%) are inverted (both incorrect). Low argmax switching does not prove internal mask insensitivity or zero routing weights. Full evidence in `evidence/runs/ssrl_02_replay_eff8aa50/`.
 
 ---
 
