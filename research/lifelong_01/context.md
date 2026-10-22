@@ -266,7 +266,16 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
    - **Approval Change:** Applied minimum approval update: `gate_approval_status: "APPROVED"` in `APPROVED_TWO_RULE_CONFIG`.
    - **Contract Validation Alignment:** Aligned dataset loader configs so production contract validation explicitly verifies both Rule A (`00a21efad1...`, study `SSRL-01`) and Rule B (`27e813e7...`, study `SSRL-02`).
    - **Automated Publishing:** Implemented `research/lifelong_01/publish_results.py` targeting dedicated `experiment-results` branch (`runs/ssrl_02/<unique_run_id>/`), enforcing 10 MB ceiling, zero credentials in commits, isolated clone workspace, and non-destructive branch initialization.
-   - **Model-Free Tests:** Expanded to 34 unit tests in `research/lifelong_01/test_ssrl_model_free.py`.
+   - **Model-Free Tests:** Expanded to 35 unit tests in `research/lifelong_01/test_ssrl_model_free.py`.
+7. **SSRL-02 Exploratory Execution Completed on Kaggle & Empirical Findings Verified (2026-10-22):**
+   - **Run ID:** `ssrl_02_d3100b00`
+   - **Executing Commit:** `d087b8ba23eeef6ef8f5fcc8dd6db5f503e276d7`
+   - **Pre-flight Tests:** All 35 model-free unit tests passed in 6.622s (Exit code: 0).
+   - **Execution Wall-Clock:** 3.46s (Within 180s ceiling, Exit code: 0).
+   - **Results Ingestion:** Ingested via base64 gzip stream in stdout; verified locally into `evidence/runs/ssrl_02_d3100b00/results.json`.
+   - **Gate G-LC:** **PASSED** (Rule A seen patterns: 192/192 = 100.00% vs threshold >= 173/192 = 90.00%).
+   - **Catastrophic Forgetting:** Rule A seen pattern accuracy drops by 42.19 percentage points (from 100.00% at $t_1$ to 57.81% at $t_2$), while `freeze_after_a` retains 100.00%.
+   - **Forward Transfer & Interference:** Rule B is learned to 100.00% (192/192) in 500 steps by `fresh_b`, while `seq_ab` reaches only 80.73% (155/192) at 500 steps, demonstrating negative acquisition transfer without isolation mechanisms.
 
 ---
 
@@ -287,7 +296,10 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 - [x] Preserve Rule B data generation bundle (`evidence/data_generation/ssrl_t2_generated_bundle.zip`).
 - [x] Preserve pilot execution results bundle (`evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip`).
 - [ ] Retrieve local copy of remote test verification archives.
-- [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (34 tests).
+- [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (35 tests).
 - [x] Record formal human approval for SSRL-02 execution (Seed 101).
 - [x] Author automated publishing utility for `experiment-results` branch.
+- [x] Ingest and verify SSRL-02 remote run artifacts (`evidence/runs/ssrl_02_d3100b00/`).
+- [x] Document empirical findings on catastrophic forgetting and transfer deltas.
+
 

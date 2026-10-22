@@ -109,5 +109,34 @@ OK
 - **Verification Status:** **REPORTED ONLY** (Researcher-Reported Terminal Stream).
   *Caveat:* The remote archive `/kaggle/working/ssrl_verify_72280459/ssrl_verification_evidence.zip` has not been locally downloaded or inspected on this workstation.
 
+---
+
+## 6. SSRL-02 Approved Remote Execution & Verified Empirical Results (2026-10-22)
+
+- **Target Commit:** `d087b8ba23eeef6ef8f5fcc8dd6db5f503e276d7`
+- **Execution Environment:** Kaggle Notebook (CPU-only, no accelerator)
+- **Run ID:** `ssrl_02_d3100b00`
+- **Remote Directory:** `/kaggle/working/ssrl_02_d3100b00`
+- **Local Artifact Directory:** `evidence/runs/ssrl_02_d3100b00/`
+- **Results Artifact:** `evidence/runs/ssrl_02_d3100b00/results.json` (35,934 bytes)
+- **Pre-flight Tests Executed:** 35 run, 35 passed, 0 failures, 0 errors in 6.622s (Exit code: 0).
+- **Execution Wall-Clock:** 3.46 seconds (asserted < 180.0s ceiling).
+- **Experiment Exit Code:** 0 (`EXPERIMENT OUTCOME: SUCCESS (Exit 0)`).
+- **Data Delivery Method:** Streamed base64 gzipped payload via notebook standard output (no manual ZIP download required).
+- **Verification Status:** **VERIFIED**. Results extracted, JSON deserialized, and per-unit outcome vectors recorded locally.
+
+### Key Empirical Outcomes:
+1. **Gate G-LC (Learnability Control on Rule A):** **PASSED** (192/192 = 100.00% vs threshold >= 173/192 = 90.00%, deviation +10.00%).
+2. **Catastrophic Forgetting on Rule A ($t_1 \to t_2$):**
+   - Seen patterns: Dropped from 192/192 (100.00%) to 111/192 (57.81%), a catastrophic loss of **42.19 percentage points**.
+   - Held-out patterns: Dropped from 29/64 (45.31%) to 16/64 (25.00%), a loss of **20.31 percentage points**.
+   - Standing Control Arm (`freeze_after_a`): Retained 192/192 (100.00%) seen and 29/64 (45.31%) held-out, confirming zero forgetting under frozen weights.
+3. **Rule B Forward Transfer & Acquisition Dynamics:**
+   - Step 0 (Transfer at init): Seen +9.38% (98/192 vs 80/192), Unseen -21.88% (34/64 vs 48/64).
+   - Step 100: Transient generalization advantage for sequential arm (+26.56% on held-out: 23/64 vs 6/64), but seen pattern fitting lags (-11.46%: 102/192 vs 124/192).
+   - Step 250: Interference in sequential arm (-33.85% seen transfer delta: `fresh_b` reaches 185/192 = 96.35%, while `seq_ab` lags at 120/192 = 62.50%).
+   - Step 500: `fresh_b` achieves 192/192 (100.00%) seen accuracy, while `seq_ab` reaches only 155/192 (80.73%), demonstrating that prior Rule A optimization produces negative transfer / slowed convergence for Rule B without plasticity protection.
+
+
 
 
