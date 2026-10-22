@@ -142,6 +142,13 @@ from research.lifelong_01.run_ssrl_replay_baseline import (
     verify_replay_specification_approval,
     run_replay_study,
 )
+from research.lifelong_01.run_ssrl_diverse_replay import (
+    PROPOSED_DIVERSE_REPLAY_CONFIG,
+    select_pattern_diverse_replay_memory,
+    compute_per_pattern_retention,
+    verify_diverse_replay_specification_approval,
+    run_diverse_replay_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -1494,6 +1501,103 @@ class TestSSRLModelFree(unittest.TestCase):
         # Must not raise
         verify_replay_specification_approval(approved)
 
+    def test_diverse_replay_buffer_selection_and_coverage(self):
+        """
+        Tests that select_pattern_diverse_replay_memory deterministically selects
+        8 class-0 and 8 class-1 Rule A training examples spanning all 12 Rule A
+        seen active patterns, enforcing exact selected IDs, M=16, 100% active pattern coverage,
+        and strict disjointness from all evaluation and probe populations.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        with open(dataset_a_path, "r", encoding="utf-8") as f:
+            da = json.load(f)
+        probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+        with open(probe_path, "r", encoding="utf-8") as f:
+            dp = json.load(f)
+
+        buffer_examples = select_pattern_diverse_replay_memory(da["train_examples"], buffer_size=16)
+        self.assertEqual(len(buffer_examples), 16)
+
+        c0 = [ex for ex in buffer_examples if ex["target_class"] == 0]
+        c1 = [ex for ex in buffer_examples if ex["target_class"] == 1]
+        self.assertEqual(len(c0), 8)
+        self.assertEqual(len(c1), 8)
+
+        # Assert exact deterministic IDs
+        expected_c0_ids = [0, 1, 48, 49, 192, 240, 432, 480]
+        expected_c1_ids = [96, 97, 144, 145, 288, 336, 384, 528]
+        self.assertEqual([ex["example_id"] for ex in c0], expected_c0_ids)
+        self.assertEqual([ex["example_id"] for ex in c1], expected_c1_ids)
+        self.assertEqual([ex["example_id"] for ex in buffer_examples], expected_c0_ids + expected_c1_ids)
+
+        # Assert active pattern coverage: all 12 seen active patterns covered
+        active_patterns = set(tuple(ex["features"][:4]) for ex in buffer_examples)
+        self.assertEqual(len(active_patterns), 12)
+
+        # Assert zero overlap with eval_seen, eval_unseen, and probe
+        sel_ids = set(ex["example_id"] for ex in buffer_examples)
+        eval_seen_ids = set(ex["example_id"] for ex in da["eval_seen_examples"])
+        eval_unseen_ids = set(ex["example_id"] for ex in da["eval_unseen_examples"])
+        self.assertEqual(len(sel_ids.intersection(eval_seen_ids)), 0)
+        self.assertEqual(len(sel_ids.intersection(eval_unseen_ids)), 0)
+
+        sel_features = set(tuple(ex["features"]) for ex in buffer_examples)
+        probe_features = set(tuple(ex["features"]) for ex in dp["probe_examples"])
+        self.assertEqual(len(sel_features.intersection(probe_features)), 0)
+
+        # Assert buffer size validation
+        with self.assertRaises(ValueError):
+            select_pattern_diverse_replay_memory(da["train_examples"], buffer_size=15)
+
+    def test_diverse_replay_specification_approval_guard(self):
+        """
+        Tests that verify_diverse_replay_specification_approval blocks unapproved execution.
+        """
+        unapproved = copy.deepcopy(PROPOSED_DIVERSE_REPLAY_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_diverse_replay_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        verify_diverse_replay_specification_approval(approved)
+
+    def test_per_pattern_retention_computation(self):
+        """
+        Tests compute_per_pattern_retention on synthetic records.
+        """
+        synth_records = [
+            SSRLExampleRecord(
+                example_id=1, rule_id=1, arm="test", seed=101, step=5, dataset_sha256="a" * 64,
+                input_features=[1, 1, 1, 1] + [0] * 12, selection_mask=[1] * 4 + [0] * 12,
+                target_class=1, predicted_class=1, is_correct=True, is_held_out_pattern=False
+            ),
+            SSRLExampleRecord(
+                example_id=2, rule_id=1, arm="test", seed=101, step=5, dataset_sha256="a" * 64,
+                input_features=[1, 1, 1, 1] + [0] * 12, selection_mask=[1] * 4 + [0] * 12,
+                target_class=1, predicted_class=0, is_correct=False, is_held_out_pattern=False
+            ),
+            SSRLExampleRecord(
+                example_id=3, rule_id=1, arm="test", seed=101, step=5, dataset_sha256="a" * 64,
+                input_features=[-1, 1, 1, 1] + [0] * 12, selection_mask=[1] * 4 + [0] * 12,
+                target_class=0, predicted_class=0, is_correct=True, is_held_out_pattern=False
+            ),
+            SSRLExampleRecord(
+                example_id=4, rule_id=1, arm="test", seed=101, step=5, dataset_sha256="a" * 64,
+                input_features=[-1, 1, 1, 1] + [0] * 12, selection_mask=[1] * 4 + [0] * 12,
+                target_class=0, predicted_class=0, is_correct=True, is_held_out_pattern=False
+            ),
+        ]
+        breakdown = compute_per_pattern_retention(synth_records, rule_indices=[0, 1, 2, 3])
+        self.assertIn("1_1_1_1", breakdown)
+        self.assertIn("-1_1_1_1", breakdown)
+        self.assertEqual(breakdown["1_1_1_1"]["numerator"], 1)
+        self.assertEqual(breakdown["1_1_1_1"]["denominator"], 2)
+        self.assertEqual(breakdown["1_1_1_1"]["rate"], 0.5)
+        self.assertEqual(breakdown["-1_1_1_1"]["numerator"], 2)
+        self.assertEqual(breakdown["-1_1_1_1"]["denominator"], 2)
+        self.assertEqual(breakdown["-1_1_1_1"]["rate"], 1.0)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -1938,6 +2042,67 @@ class TestSSRLCPUIntegration(unittest.TestCase):
             self.assertTrue(os.path.isfile(final_ckpt))
             self.assertIn("acc_rule_a_seen", res["metrics"])
             self.assertIn("counterfactual_probe", res["diagnostics"])
+
+    def test_diverse_replay_tiny_e2e_integration(self):
+        """
+        Tests the real training-to-evaluation path of run_diverse_replay_study with a bounded
+        tiny fixture budget (4 B steps + 1 Diverse Replay A step = 5 steps).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_diverse_replay")
+            dest_json = os.path.join(tmpdir, "results.json")
+            t1_ckpt = os.path.join(tmpdir, "checkpoint_t1_post_a.pt")
+
+            test_model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+            torch.save(test_model.state_dict(), t1_ckpt)
+            with open(t1_ckpt, "rb") as f:
+                sha_ckpt = hashlib.sha256(f.read()).hexdigest()
+            fp_ckpt = compute_tensor_fingerprint_from_state_dict(test_model.state_dict())
+
+            cfg = copy.deepcopy(PROPOSED_DIVERSE_REPLAY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["expected_t1_fingerprint"] = fp_ckpt
+            cfg["expected_t1_file_sha256"] = sha_ckpt
+            cfg["step_budget_b"] = 4
+            cfg["step_budget_replay_a"] = 1
+            cfg["step_budget_total"] = 5
+            cfg["replay_cycles"] = 1
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            res = run_diverse_replay_study(
+                dataset_a_path=dataset_a_path,
+                sha256_a=sha_a,
+                dataset_b_path=dataset_b_path,
+                sha256_b=sha_b,
+                probe_dataset_path=probe_path,
+                sha256_probe=sha_probe,
+                destination=dest_json,
+                run_dir=run_dir,
+                t1_checkpoint_path=t1_ckpt,
+                config=cfg
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            self.assertEqual(res["diagnostics"]["exposures"]["total_optimizer_steps"], 5)
+            self.assertEqual(res["diagnostics"]["exposures"]["rule_b_presentations"], 64)
+            self.assertEqual(res["diagnostics"]["exposures"]["replay_a_presentations"], 16)
+            self.assertEqual(res["diagnostics"]["exposures"]["total_presentations"], 80)
+            self.assertTrue(os.path.isfile(dest_json))
+            final_ckpt = os.path.join(run_dir, "checkpoint_diverse_replay_step625_final.pt")
+            self.assertTrue(os.path.isfile(final_ckpt))
+            self.assertIn("acc_rule_a_seen", res["metrics"])
+            self.assertIn("counterfactual_probe", res["diagnostics"])
+            self.assertIn("rule_a_seen_per_pattern", res["diagnostics"])
+            self.assertEqual(len(res["diagnostics"]["rule_a_seen_per_pattern"]), 12)
 
 
 if __name__ == "__main__":
