@@ -66,3 +66,33 @@ Ran 20 tests in 4.303s
 OK
 [Success] All 20 model-free unit tests passed with exit code 0.
 ```
+
+---
+
+## 3. SSRL-02 Expanded Test Suite Verification (2026-10-21) [Reported]
+
+- **Target Commit:** `2484408a36aa29055b15a052bf80214abf988883`
+- **Execution Environment:** Kaggle Notebook (CPU-only, no accelerator)
+- **Run ID:** `ssrl_verify_0grt8_2x`
+- **Remote Directory:** `/kaggle/working/ssrl_verify_0grt8_2x`
+- **Evidence Archive:** `/kaggle/working/ssrl_verify_0grt8_2x/ssrl_verification_evidence.zip`
+- **Discovered Test Count:** 26 tests
+- **Reported Outcome:** 26 run, 26 passed, 0 failures, 0 errors in 7.545s (Reported exit code: `0`)
+- **Verification Status:** **REPORTED ONLY** (Researcher-Reported Terminal Stream).
+  *Caveat:* The remote archive `/kaggle/working/ssrl_verify_0grt8_2x/ssrl_verification_evidence.zip` has not been locally downloaded or inspected on this workstation. Furthermore, this 26-test verification certifies commit `2484408a`; it does **not** certify any subsequent runner or scaffolding code authored thereafter.
+
+---
+
+## 4. SSRL-02 Rule B Remote Dataset Generation (2026-10-22) [Reported]
+
+- **Execution Environment:** Kaggle Notebook (CPU-only, no accelerator)
+- **Run ID:** `ssrl_gen_t2_r3nnlpez`
+- **Remote Directory:** `/kaggle/working/ssrl_gen_t2_r3nnlpez`
+- **Rule B Dataset Canonical SHA-256:** `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4`
+- **Rule B Manifest Path:** `/kaggle/working/ssrl_gen_t2_r3nnlpez/lifelong-learning/research/lifelong_01/data/ssrl_pilot_t2_s101_manifest.json`
+- **Remote Bundle Archive:** `/kaggle/working/ssrl_gen_t2_r3nnlpez/ssrl_t2_generated_bundle.zip`
+- **Reported Outcome:** All 640 examples verified: counts (384 train / 192 seen-eval / 64 held-out-eval), labels, masks, and pattern disjointness passed.
+- **Verification Status:** **REPORTED ONLY** (Researcher-Reported Terminal Stream).
+  *Caveat:* The remote bundle `/kaggle/working/ssrl_gen_t2_r3nnlpez/ssrl_t2_generated_bundle.zip` has not been locally extracted or inspected on this workstation.
+
+

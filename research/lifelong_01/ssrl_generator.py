@@ -99,10 +99,12 @@ def validate_pilot_dataset_contract(data: Dict[str, Any], approved_config: Dict[
     meta = data["metadata"]
 
     # 1. Study and Phase
-    if meta.get("study_id") != approved_config.get("study_id"):
-        raise PilotDatasetContractError(f"study_id mismatch: metadata={meta.get('study_id')}, config={approved_config.get('study_id')}")
-    if meta.get("phase") != "learnability_pilot":
-        raise PilotDatasetContractError(f"phase mismatch: expected 'learnability_pilot', got '{meta.get('phase')}'")
+    expected_study = approved_config.get("study_id", "SSRL-01")
+    if meta.get("study_id") != expected_study:
+        raise PilotDatasetContractError(f"study_id mismatch: metadata={meta.get('study_id')}, config={expected_study}")
+    expected_phase = approved_config.get("phase", "learnability_pilot")
+    if meta.get("phase") != expected_phase:
+        raise PilotDatasetContractError(f"phase mismatch: expected '{expected_phase}', got '{meta.get('phase')}'")
 
     # 2. Seed and Dimensions
     expected_seed = approved_config.get("seed", 101)
@@ -147,7 +149,8 @@ def validate_pilot_dataset_contract(data: Dict[str, Any], approved_config: Dict[
     eval_seen_vectors: Set[Tuple[int, ...]] = set()
     eval_unseen_vectors: Set[Tuple[int, ...]] = set()
 
-    expected_train_pats, expected_unseen_pats = partition_active_patterns(seed=42)
+    partition_seed = approved_config.get("partition_seed", 42)
+    expected_train_pats, expected_unseen_pats = partition_active_patterns(seed=partition_seed)
     expected_train_pats_set = set(expected_train_pats)
     expected_unseen_pats_set = set(expected_unseen_pats)
 
@@ -244,7 +247,10 @@ def generate_pilot_dataset_dict(
     k: int = 4,
     train_draws_per_pattern: int = 32,   # 12 * 32 = 384
     eval_seen_draws_per_pattern: int = 16, # 12 * 16 = 192
-    eval_unseen_draws_per_pattern: int = 16 # 4 * 16 = 64
+    eval_unseen_draws_per_pattern: int = 16, # 4 * 16 = 64
+    partition_seed: int = 42,
+    study_id: str = "SSRL-01",
+    phase: str = "learnability_pilot"
 ) -> Dict[str, Any]:
     """
     Builds the complete pilot dataset dictionary in memory.
@@ -262,7 +268,7 @@ def generate_pilot_dataset_dict(
     if needed_per_seen > total_distractor_configs:
         raise ValueError(f"Requested {needed_per_seen} distractor draws exceeds domain of {total_distractor_configs}")
 
-    train_patterns, held_out_patterns = partition_active_patterns(seed=42)
+    train_patterns, held_out_patterns = partition_active_patterns(seed=partition_seed)
     rng = random.Random(seed)
     all_distractors = list(itertools.product([-1, 1], repeat=num_inactive))
 
@@ -352,11 +358,12 @@ def generate_pilot_dataset_dict(
 
     dataset_dict = {
         "metadata": {
-            "study_id": "SSRL-01",
-            "phase": "learnability_pilot",
+            "study_id": study_id,
+            "phase": phase,
             "rule_id": rule_id,
             "rule_indices": list(rule_indices),
             "seed": seed,
+            "partition_seed": partition_seed,
             "d": d,
             "k": k,
             "num_active_patterns_seen": 12,

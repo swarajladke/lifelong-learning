@@ -231,18 +231,31 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 
 ## 8. Migration Verification and SSRL-02 Status
 
-1. **Migration Verification on Kaggle (2026-10-21) [Reported]:**
+1. **Initial Migration Verification on Kaggle (2026-10-21) [Reported]:**
    - **Tested Commit:** `3747300a20ab28724cb5d958377a10036cd9f41a`
    - **Environment:** Remote Kaggle Notebook (CPU-only, no accelerator).
    - **Run Directory:** `/kaggle/working/ssrl_verify_tslkkbjb`
    - **Reported Outcome:** 20 / 20 unit and regression tests passed in 4.303s with exit code 0 (researcher-reported terminal stream).
-   - **Status & Caveat:** Reported only. The raw archive (`/kaggle/working/ssrl_verify_tslkkbjb/ssrl_verification_evidence.zip`) has not yet been downloaded to the local workstation or inspected independently. It must not be cited as verified from raw disk evidence until downloaded. Transcript preserved in `evidence/migration_verification/README.md`.
-2. **Preserved Pilot Results Bundle:**
+   - **Status & Caveat:** Reported only. The raw archive (`/kaggle/working/ssrl_verify_tslkkbjb/ssrl_verification_evidence.zip`) has not yet been downloaded to the local workstation or inspected independently. Transcript preserved in `evidence/migration_verification/README.md`.
+2. **SSRL-02 Expanded Test Suite Verification on Kaggle (2026-10-21) [Reported]:**
+   - **Tested Commit:** `2484408a36aa29055b15a052bf80214abf988883`
+   - **Environment:** Remote Kaggle Notebook (CPU-only, no accelerator).
+   - **Run Directory:** `/kaggle/working/ssrl_verify_0grt8_2x`
+   - **Reported Outcome:** 26 / 26 unit and regression tests passed in 7.545s with exit code 0 (researcher-reported terminal stream).
+   - **Status & Caveat:** Reported only. The raw archive (`/kaggle/working/ssrl_verify_0grt8_2x/ssrl_verification_evidence.zip`) has not yet been downloaded to the local workstation or inspected independently. This pass certifies commit `2484408a` and does not certify subsequently authored runner code.
+3. **Preserved Pilot Results Bundle:**
    - Single-rule pilot results bundle preserved in `evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip` (SHA-256 `9780d34cc30f7a0639ce981671bbc87d22b5c751e62c9e2178f6a7a315579f1b`).
    - Verified empirical findings: Gate $G\text{-LC}$ PASSED (Seen active patterns: 192/192 = 100.00%), held-out pattern generalization: 28/64 = 43.75%.
-3. **Current Task: SSRL-02 Protocol & Scaffolding:**
-   - Bounded two-rule sequential-learning exploratory study (Rule A: `[0, 1, 2, 3]` vs. Rule B: `[4, 5, 6, 7]`).
-   - Model-free scaffolding only: no local training, tuning, or neural compute authorized.
+4. **Rule B Dataset Generation on Kaggle (2026-10-22) [Reported]:**
+   - **Run ID:** `ssrl_gen_t2_r3nnlpez`
+   - **Remote Directory:** `/kaggle/working/ssrl_gen_t2_r3nnlpez`
+   - **Canonical SHA-256 Byte Hash:** `27e813e73bf66f51e1bff07f7d2f19945e830afc6d5876b0cb4d11136cda4cd4`
+   - **Evidence Bundle:** `/kaggle/working/ssrl_gen_t2_r3nnlpez/ssrl_t2_generated_bundle.zip`
+   - **Reported Outcome:** All 640 examples verified (384 train / 192 seen-eval / 64 held-out-eval), parity labels, masks, and pattern disjointness passed.
+5. **SSRL-02 Runner Implementation & Scaffolding (2026-10-22):**
+   - Implemented bounded two-rule runner (`research/lifelong_01/run_ssrl_two_rule.py`, 401 lines, under 600-line ceiling) covering `seq_ab`, `fresh_b`, `freeze_after_a` arms, boundary Adam rebuild ($m=0, v=0, \text{step}=0$), shared minibatch schedule, and step 0/100/250/500 evaluations.
+   - Expanded model-free test suite to 31 unit and regression tests in `research/lifelong_01/test_ssrl_model_free.py`.
+   - Neural execution remains blocked. Ready for 31-test remote verification on Kaggle and Rule B dataset placement into repository.
 
 ---
 
@@ -258,8 +271,10 @@ All research activities must adhere strictly to `AGENTS.md`. Key operational req
 
 - [x] Verify standalone repository and workspace (`C:\Users\Vicky\Desktop\lifelong-learning`, `main`).
 - [x] Record migration verification outcome (20/20 unit tests passed on Kaggle, exit code 0, commit `3747300a`).
+- [x] Record SSRL-02 expanded test suite outcome (26/26 tests passed on Kaggle, exit code 0, commit `2484408a`).
+- [x] Record Rule B dataset remote generation outcome (SHA-256 `27e813e7...`, run `ssrl_gen_t2_r3nnlpez`).
 - [x] Preserve pilot execution results bundle (`evidence/pilot/ssrl_pilot_t1_s101_results_bundle.zip`).
-- [ ] Retrieve local copy of migration verification archive (`ssrl_verification_evidence.zip`).
-- [ ] Complete model-free scaffolding for SSRL-02 two-rule sequential study.
+- [ ] Retrieve local copy of migration and generation verification archives.
+- [x] Complete model-free scaffolding for SSRL-02 two-rule sequential study (31 tests).
 - [ ] Submit SSRL-02 specification for formal human review before any compute dispatch.
 

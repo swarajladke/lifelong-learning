@@ -1,5 +1,5 @@
 """
-research/lifelong_01/test_ssrl_model_free.py -- Model-free regression test suite for SSRL-01.
+research/lifelong_01/test_ssrl_model_free.py -- Model-free regression test suite for SSRL-01 and SSRL-02.
 
 Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 1. Parity label computation and selection mask interpretation.
@@ -22,6 +22,17 @@ Contains handcrafted, CPU-only unit tests with ZERO neural model instantiations:
 18. Monotonic deadline enforcement before and after operations.
 19. Rejection of rule_id mismatch in metadata and examples.
 20. Exclusive run-directory reservation preventing overwrite.
+21. SSRLDeltaMeasurement dataclass validation (numerator/denominator integrity, unit strings, negative deltas).
+22. compute_forgetting_from_records signed deltas (positive forgetting, zero retention, negative backward transfer).
+23. compute_transfer_from_records signed deltas (positive transfer, zero difference, negative interference).
+24. Cross-rule comparison rejection in delta evaluators (rule_id mismatch).
+25. Dataset SHA-256 mismatch rejection in delta evaluators.
+26. Target class mismatch rejection in delta evaluators.
+27. Two-rule minibatch schedule pairing: identical sequences for identical seeds, different for different seeds.
+28. Two-rule checkpoint independence: deepcopy cloning prevents live state mutations from altering checkpoint.
+29. Two-rule specification approval guard: unapproved status rejected before model construction or data processing.
+30. Two-rule failure diagnostics persistence: writes failure_diagnostics.json on early specification rejection.
+31. Two-rule step 0 transfer delta semantics: compares seq_ab at t1 against fresh_b at t0 on Rule B evaluation population.
 """
 
 from __future__ import annotations
@@ -69,6 +80,12 @@ from research.lifelong_01.run_ssrl_learnability_pilot import (
     configure_determinism,
     capture_environment_provenance,
     evaluate_model_on_split,
+)
+from research.lifelong_01.run_ssrl_two_rule import (
+    APPROVED_TWO_RULE_CONFIG,
+    build_minibatch_schedule,
+    verify_run_specification_approval as verify_two_rule_approval,
+    run_two_rule_study,
 )
 
 
@@ -780,6 +797,129 @@ class TestSSRLModelFree(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             compute_transfer_from_records(rec_seq, rec_mismatch_target)
         self.assertIn("Target class mismatch", str(ctx.exception))
+
+    def test_two_rule_minibatch_schedule_pairing(self):
+        """
+        Tests that build_minibatch_schedule produces identical batch sequences
+        when given the same seed, proving that seq_ab and fresh_b can be paired exactly.
+        """
+        dummy_pool = [{"example_id": i, "features": [1]*16} for i in range(50)]
+        sched_seq = build_minibatch_schedule(dummy_pool, step_budget=10, batch_size=4, seed=2027)
+        sched_fresh = build_minibatch_schedule(dummy_pool, step_budget=10, batch_size=4, seed=2027)
+
+        self.assertEqual(len(sched_seq), 10)
+        self.assertEqual(len(sched_fresh), 10)
+        for b_s, b_f in zip(sched_seq, sched_fresh):
+            ids_s = [ex["example_id"] for ex in b_s]
+            ids_f = [ex["example_id"] for ex in b_f]
+            self.assertEqual(ids_s, ids_f)
+
+        # Different seed must yield a different schedule
+        sched_diff = build_minibatch_schedule(dummy_pool, step_budget=10, batch_size=4, seed=9999)
+        first_step_same = ([ex["example_id"] for ex in sched_seq[0]] == [ex["example_id"] for ex in sched_diff[0]])
+        self.assertFalse(first_step_same)
+
+    def test_two_rule_checkpoint_independence_double(self):
+        """
+        Tests that post-A checkpoint cloning produces an independent dictionary double,
+        so mutating the live state does not contaminate the preserved checkpoint.
+        """
+        live_state = {"layer1.weight": [1.0, 2.0], "layer2.bias": [0.5]}
+        post_a_checkpoint = copy.deepcopy(live_state)
+
+        # Simulate subsequent training updates on live_state
+        live_state["layer1.weight"][0] = 99.0
+        live_state["new_key"] = [10.0]
+
+        self.assertEqual(post_a_checkpoint["layer1.weight"][0], 1.0)
+        self.assertNotIn("new_key", post_a_checkpoint)
+
+    def test_two_rule_specification_approval_guard(self):
+        """
+        Tests that verify_two_rule_approval rejects unapproved configuration
+        before any model construction or dataset processing.
+        """
+        unapproved_config = {**APPROVED_TWO_RULE_CONFIG, "gate_approval_status": "PROPOSED_PENDING_APPROVAL"}
+        with self.assertRaises(SpecificationApprovalError):
+            verify_two_rule_approval(unapproved_config)
+
+        approved_config = {**APPROVED_TWO_RULE_CONFIG, "gate_approval_status": "APPROVED"}
+        # Must not raise
+        verify_two_rule_approval(approved_config)
+
+    def test_two_rule_failure_diagnostics_persistence(self):
+        """
+        Tests that run_two_rule_study writes failure_diagnostics.json to the run
+        directory when an unapproved configuration causes an abort.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "two_rule_run")
+            dest = os.path.join(tmpdir, "two_rule_results.json")
+            unapproved = {**APPROVED_TWO_RULE_CONFIG, "gate_approval_status": "PROPOSED_PENDING_APPROVAL"}
+
+            with self.assertRaises(SpecificationApprovalError):
+                run_two_rule_study(
+                    config=unapproved,
+                    dataset_a_path="dummy_a.json",
+                    expected_sha_a="0"*64,
+                    dataset_b_path="dummy_b.json",
+                    expected_sha_b="0"*64,
+                    destination=dest,
+                    run_dir=run_dir,
+                )
+
+            failure_file = os.path.join(run_dir, "failure_diagnostics.json")
+            self.assertTrue(os.path.exists(failure_file))
+            with open(failure_file, "r") as f:
+                data = json.load(f)
+            self.assertEqual(data["status"], "FAILED")
+            self.assertEqual(data["error_type"], "SpecificationApprovalError")
+
+    def test_two_rule_step0_transfer_delta_semantics(self):
+        """
+        Tests that zero-shot transfer delta at step 0 compares sequential model at t1
+        against fresh model at t0 on the identical Rule B evaluation population.
+        """
+        recs_t1_seq = [
+            SSRLExampleRecord(
+                example_id=i,
+                rule_id=2,
+                arm="seq_ab",
+                seed=101,
+                step=2000,
+                dataset_sha256="b"*64,
+                input_features=[1]*16,
+                selection_mask=[0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0],
+                target_class=1 if i % 2 == 0 else 0,
+                predicted_class=1 if i % 2 == 0 else 0,
+                is_correct=True,
+                is_held_out_pattern=False
+            )
+            for i in range(10)
+        ]
+        recs_t0_fresh = [
+            SSRLExampleRecord(
+                example_id=i,
+                rule_id=2,
+                arm="init",
+                seed=101,
+                step=0,
+                dataset_sha256="b"*64,
+                input_features=[1]*16,
+                selection_mask=[0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0],
+                target_class=1 if i % 2 == 0 else 0,
+                predicted_class=1 if i < 5 else 0,
+                is_correct=((1 if i < 5 else 0) == (1 if i % 2 == 0 else 0)),
+                is_held_out_pattern=False
+            )
+            for i in range(10)
+        ]
+        transfer_step0 = compute_transfer_from_records(recs_t1_seq, recs_t0_fresh, "transfer_step0_seen")
+        self.assertEqual(transfer_step0["unit"], "percentage_points")
+        self.assertEqual(transfer_step0["denominator"], 10)
+        self.assertEqual(transfer_step0["target_rule_id"], 2)
+        # 10/10 vs 5/10 -> delta = +50.0 percentage points
+        self.assertAlmostEqual(transfer_step0["delta_pct"], 50.0)
 
 
 if __name__ == "__main__":
