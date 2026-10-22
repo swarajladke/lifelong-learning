@@ -1,0 +1,57 @@
+{
+  "approval_status": "APPROVED",
+  "checkpoints": {
+    "checkpoint_joint_step1000": {
+      "file_sha256": "0b3d369f2c299261a36c8302b750a167dc9d68f3370193041c864076f3a85e82",
+      "filename": "checkpoint_joint_step1000.pt",
+      "path": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\checkpoint_joint_step1000.pt",
+      "size_bytes": 28476,
+      "tensor_fingerprint": "4bf15b31903a9f45c96814e0a92f6db7f7cca16dfb77ca324003b94336427058"
+    },
+    "checkpoint_joint_step2000": {
+      "file_sha256": "858a076a2cc070ba9fc818cb6f691ec8f7851f8660b8644aaa2f5bcf5ff45d3f",
+      "filename": "checkpoint_joint_step2000.pt",
+      "path": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\checkpoint_joint_step2000.pt",
+      "size_bytes": 28476,
+      "tensor_fingerprint": "079b0c78fe99d6c5ad964e63bac561d63bc4ad5ca5d1104b437828139dc6d79a"
+    },
+    "checkpoint_joint_step2500_final": {
+      "file_sha256": "5d9e10099b39387e4aa6627f9a447e820ebaa7190905bfabc82c8abb85416bdd",
+      "filename": "checkpoint_joint_step2500_final.pt",
+      "path": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\checkpoint_joint_step2500_final.pt",
+      "size_bytes": 28536,
+      "tensor_fingerprint": "ea35ce5a9f4072b46a71bdca233dda9ee3154350e3a73337f0ffe6cd9b414bc6"
+    },
+    "checkpoint_joint_step500": {
+      "file_sha256": "a4aab59a837ca26d1644c8c99b78462fc2f2da919962acd3bfcd72daeed1fbed",
+      "filename": "checkpoint_joint_step500.pt",
+      "path": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\checkpoint_joint_step500.pt",
+      "size_bytes": 28466,
+      "tensor_fingerprint": "2806f01a610817dc210656c3958fb2b46fa5ae51f4235a914ee2c67c87f3e08c"
+    },
+    "checkpoint_joint_t0_init": {
+      "file_sha256": "e8fba4edd19229a1082d053ae235e2b1a8fe7682e0f0cb406383d17e4fd8b596",
+      "filename": "checkpoint_joint_t0_init.pt",
+      "path": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\checkpoint_joint_t0_init.pt",
+      "size_bytes": 28466,
+      "tensor_fingerprint": "acb9143e56b062e595cfa413ff54a819d3f237af7692cc11a1d3abd3e06109c9"
+    }
+  },
+  "classification": "offline_joint_training_reference",
+  "destination": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678\\results.json",
+  "elapsed_probe_seconds": 0.0,
+  "elapsed_total_seconds": 10.25,
+  "elapsed_training_seconds": 10.25,
+  "error_message": "SSRLExampleRecord.__init__() got an unexpected keyword argument 'features'",
+  "error_type": "TypeError",
+  "exposures": {
+    "rule_a_presentations": 32000,
+    "rule_b_presentations": 8000,
+    "total_optimizer_steps": 2500,
+    "total_presentations": 40000
+  },
+  "phase": "joint_learnability_reference",
+  "run_directory": "C:\\Users\\Vicky\\Desktop\\lifelong-learning\\evidence\\runs\\ssrl_03_joint_reference_6c9e3678",
+  "status": "FAILED",
+  "study_id": "SSRL-03"
+}
