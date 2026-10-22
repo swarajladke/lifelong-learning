@@ -33,6 +33,8 @@ from research.lifelong_01.ssrl_types import (
 )
 from research.lifelong_01.ssrl_model import (
     SSRLInstructionMLP,
+)
+from research.lifelong_01.ssrl_checkpoints import (
     compute_tensor_fingerprint_from_state_dict,
 )
 from research.lifelong_01.ssrl_counterfactual_probe import (
