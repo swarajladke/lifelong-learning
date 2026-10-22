@@ -915,11 +915,11 @@ class TestSSRLModelFree(unittest.TestCase):
             for i in range(10)
         ]
         transfer_step0 = compute_transfer_from_records(recs_t1_seq, recs_t0_fresh, "transfer_step0_seen")
-        self.assertEqual(transfer_step0["unit"], "percentage_points")
-        self.assertEqual(transfer_step0["denominator"], 10)
-        self.assertEqual(transfer_step0["target_rule_id"], 2)
+        self.assertEqual(transfer_step0["units"], "percentage_points")
+        self.assertEqual(transfer_step0["population_size"], 10)
+        self.assertEqual(transfer_step0["rule_id"], 2)
         # 10/10 vs 5/10 -> delta = +50.0 percentage points
-        self.assertAlmostEqual(transfer_step0["delta_pct"], 50.0)
+        self.assertAlmostEqual(transfer_step0["transfer_delta_pct"], 50.0)
 
 
 if __name__ == "__main__":

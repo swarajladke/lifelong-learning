@@ -32,6 +32,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from research.lifelong_01.run_ssrl_learnability_pilot import SpecificationApprovalError
 from research.lifelong_01.ssrl_types import SSRLExampleRecord, SSRLMeasurement, compute_accuracy_measurement
 from research.lifelong_01.ssrl_model import SSRLInstructionMLP
 from research.lifelong_01.ssrl_generator import load_and_verify_dataset, PilotDatasetContractError
@@ -78,11 +79,6 @@ APPROVED_TWO_RULE_CONFIG: Dict[str, Any] = {
     "wall_clock_ceiling_training_seconds": 180.0,
     "wall_clock_ceiling_eval_seconds": 60.0,
 }
-
-
-class SpecificationApprovalError(Exception):
-    """Raised when an unapproved run specification is submitted for execution."""
-    pass
 
 
 class DeadlineExceededError(Exception):
