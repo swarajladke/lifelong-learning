@@ -127,6 +127,7 @@ from research.lifelong_01.run_ssrl_joint_reference import (
     interleave_minibatch_schedules,
     load_and_verify_initial_model,
     CheckpointVerificationError,
+    DeadlineExceededError,
     verify_joint_specification_approval,
     EXPECTED_T0_FINGERPRINT,
     PROPOSED_JOINT_REFERENCE_CONFIG,
@@ -148,6 +149,13 @@ from research.lifelong_01.run_ssrl_diverse_replay import (
     compute_per_pattern_retention,
     verify_diverse_replay_specification_approval,
     run_diverse_replay_study,
+)
+from research.lifelong_01.run_ssrl_paired_replication import (
+    PROPOSED_PAIRED_REPLICATION_CONFIG,
+    verify_paired_replication_specification_approval,
+    compute_schedule_hash,
+    train_single_arm,
+    run_paired_replication_study,
 )
 
 
@@ -1598,6 +1606,67 @@ class TestSSRLModelFree(unittest.TestCase):
         self.assertEqual(breakdown["-1_1_1_1"]["denominator"], 2)
         self.assertEqual(breakdown["-1_1_1_1"]["rate"], 1.0)
 
+    def test_paired_replication_specification_approval_guard(self):
+        """
+        Tests that verify_paired_replication_specification_approval blocks unapproved execution.
+        """
+        unapproved = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_paired_replication_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        verify_paired_replication_specification_approval(approved)
+
+    def test_paired_schedule_and_manifest_determinism(self):
+        """
+        Tests schedule pairing, schedule hashes, and memory manifest determinism for SSRL-06.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        with open(dataset_a_path, "r", encoding="utf-8") as fa:
+            da = json.load(fa)
+        with open(dataset_b_path, "r", encoding="utf-8") as fb:
+            db = json.load(fb)
+
+        mem_lowest = select_replay_memory(da["train_examples"], buffer_size=16)
+        mem_div = select_pattern_diverse_replay_memory(da["train_examples"], buffer_size=16)
+
+        # Manifest checks
+        self.assertEqual(len(mem_lowest), 16)
+        self.assertEqual(len(mem_div), 16)
+        self.assertEqual(sum(1 for ex in mem_lowest if ex["target_class"] == 0), 8)
+        self.assertEqual(sum(1 for ex in mem_lowest if ex["target_class"] == 1), 8)
+        self.assertEqual(sum(1 for ex in mem_div if ex["target_class"] == 0), 8)
+        self.assertEqual(sum(1 for ex in mem_div if ex["target_class"] == 1), 8)
+        self.assertEqual(len(set(tuple(ex["features"][:4]) for ex in mem_div)), 12)
+
+        # Paired schedule creation
+        sched_b = build_minibatch_schedule(db["train_examples"], step_budget=500, batch_size=16, seed=2027)
+        sched_lowest = build_replay_schedule(sched_b, mem_lowest, ratio_b=4, ratio_a=1)
+        sched_div = build_replay_schedule(sched_b, mem_div, ratio_b=4, ratio_a=1)
+
+        self.assertEqual(len(sched_lowest), 625)
+        self.assertEqual(len(sched_div), 625)
+
+        # Assert identical B minibatches across both schedules
+        for cycle in range(125):
+            base = cycle * 5
+            for k in range(4):
+                tag_l, rid_l, batch_l = sched_lowest[base + k]
+                tag_d, rid_d, batch_d = sched_div[base + k]
+                self.assertEqual(tag_l, "rule_b")
+                self.assertEqual(tag_d, "rule_b")
+                self.assertEqual([ex["example_id"] for ex in batch_l], [ex["example_id"] for ex in batch_d])
+
+        # Schedule hash determinism
+        h1 = compute_schedule_hash(sched_lowest)
+        h2 = compute_schedule_hash(sched_lowest)
+        self.assertEqual(h1, h2)
+        h_div = compute_schedule_hash(sched_div)
+        self.assertNotEqual(h1, h_div)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -2103,6 +2172,329 @@ class TestSSRLCPUIntegration(unittest.TestCase):
             self.assertIn("counterfactual_probe", res["diagnostics"])
             self.assertIn("rule_a_seen_per_pattern", res["diagnostics"])
             self.assertEqual(len(res["diagnostics"]["rule_a_seen_per_pattern"]), 12)
+
+    def test_paired_replication_checkpoint_mismatch_rejection(self):
+        """
+        AGENTS.md Section 8.4: Negative test showing mismatched starting state is rejected.
+        Asserts train_single_arm raises CheckpointVerificationError when the loaded state's
+        tensor fingerprint does not equal the expected post-A fingerprint.
+        """
+        model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+        state_dict = model.state_dict()
+        expected_fp = "0" * 64
+
+        cfg = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+        dummy_batch = [{"example_id": 1, "features": [0.0] * 16, "mask": [1.0] * 16, "target_class": 0}]
+        dummy_schedule = [("rule_b", 2, dummy_batch)]
+
+        with self.assertRaises(CheckpointVerificationError) as ctx:
+            train_single_arm(
+                initial_model_state=state_dict,
+                schedule=dummy_schedule,
+                config=cfg,
+                train_deadline=time.monotonic() + 60.0,
+                expected_fingerprint=expected_fp,
+            )
+        self.assertIn("Initial model fingerprint mismatch", str(ctx.exception))
+
+    def test_paired_replication_tiny_e2e_integration(self):
+        """
+        Tests tiny paired replication fixture:
+        - Seed 102 (whitelisted in production allowlist; in tempdir)
+        - 2 steps Phase A
+        - 5 updates per arm: 4 B updates and 1 A replay update (80 presentations)
+        Verifies:
+        - Exact completed update and presentation counters for each task
+        - Forked arm execution from identical checkpoint state
+        - Identical post-A tensor fingerprint recorded and verified for both arms
+        - Primary retention delta and secondary acquisition delta serialization
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_paired")
+            dest_json = os.path.join(tmpdir, "results.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102]
+            cfg["step_budget_a_per_seed"] = 2
+            cfg["step_budget_b_per_arm"] = 4
+            cfg["step_budget_replay_per_arm"] = 1
+            cfg["step_budget_total_per_arm"] = 5
+            cfg["replay_ratio_b_to_a"] = [4, 1]
+            cfg["replay_cycles"] = 1
+            cfg["gate_g_lc_threshold"] = 0.0  # Allow tiny 2-step model to pass Phase A
+
+            res = run_paired_replication_study(
+                dataset_a_path=dataset_a_path,
+                sha256_a=sha_a,
+                dataset_b_path=dataset_b_path,
+                sha256_b=sha_b,
+                probe_dataset_path=probe_path,
+                sha256_probe=sha_probe,
+                destination=dest_json,
+                run_dir=run_dir,
+                config=cfg,
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            self.assertEqual(len(res["diagnostics"]["paired_differences"]), 1)
+            pair = res["diagnostics"]["paired_differences"][0]
+            self.assertEqual(pair["seed"], 102)
+            self.assertIn("primary_delta_retention_pp", pair)
+            self.assertIn("secondary_delta_acquisition_pp", pair)
+            self.assertIn("post_a_seen_pct", pair)
+
+            # Check that checkpoint files were saved and whitelisted
+            ckpt_post_a = os.path.join(run_dir, "checkpoint_t1_post_a_s102.pt")
+            ckpt_lid = os.path.join(run_dir, "checkpoint_lowest_id_final_s102.pt")
+            ckpt_div = os.path.join(run_dir, "checkpoint_diverse_replay_final_s102.pt")
+            self.assertTrue(os.path.isfile(ckpt_post_a))
+            self.assertTrue(os.path.isfile(ckpt_lid))
+            self.assertTrue(os.path.isfile(ckpt_div))
+
+            s_data = res["diagnostics"]["seeds_data"]["102"]
+            fp_post_a = s_data["checkpoint_post_a"]["tensor_fingerprint"]
+
+            # Strengthened checkpoint-pairing verification:
+            # Record actual fingerprint after loading and before updates; assert both equal saved post-A
+            self.assertEqual(s_data["arm_lowest_id"]["loaded_initial_fingerprint"], fp_post_a)
+            self.assertEqual(s_data["arm_diverse"]["loaded_initial_fingerprint"], fp_post_a)
+            self.assertEqual(
+                s_data["arm_lowest_id"]["loaded_initial_fingerprint"],
+                s_data["arm_diverse"]["loaded_initial_fingerprint"],
+            )
+
+            # Assert exact completed update and presentation counters for each task
+            counters_a = s_data["counters_phase_a"]
+            self.assertEqual(counters_a["rule_a_updates"], 2)
+            self.assertEqual(counters_a["rule_a_presentations"], 32)
+            self.assertEqual(counters_a["total_optimizer_steps"], 2)
+            self.assertEqual(counters_a["total_presentations"], 32)
+
+            counters_lid = s_data["arm_lowest_id"]["counters"]
+            self.assertEqual(counters_lid["rule_b_updates"], 4)
+            self.assertEqual(counters_lid["rule_b_presentations"], 64)
+            self.assertEqual(counters_lid["replay_a_updates"], 1)
+            self.assertEqual(counters_lid["replay_a_presentations"], 16)
+            self.assertEqual(counters_lid["total_optimizer_steps"], 5)
+            self.assertEqual(counters_lid["total_presentations"], 80)
+
+            counters_div = s_data["arm_diverse"]["counters"]
+            self.assertEqual(counters_div["rule_b_updates"], 4)
+            self.assertEqual(counters_div["rule_b_presentations"], 64)
+            self.assertEqual(counters_div["replay_a_updates"], 1)
+            self.assertEqual(counters_div["replay_a_presentations"], 16)
+            self.assertEqual(counters_div["total_optimizer_steps"], 5)
+            self.assertEqual(counters_div["total_presentations"], 80)
+
+    def test_paired_replication_training_deadline_failure(self):
+        """
+        AGENTS.md Section 2.6, 8.4, 10: Training-stage deadline failure.
+        Asserts DeadlineExceededError is raised, failure diagnostics are persisted,
+        the failing stage and seed are recorded as FAILED, later seeds are NOT_RUN,
+        and no replacement seeds or retries occur.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_train_deadline")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a_per_seed"] = 2
+            cfg["step_budget_b_per_arm"] = 4
+            cfg["step_budget_replay_per_arm"] = 1
+            cfg["step_budget_total_per_arm"] = 5
+            cfg["replay_ratio_b_to_a"] = [4, 1]
+            cfg["wall_clock_ceiling_training_seconds_per_stage"] = -1.0  # Controlled immediate deadline failure
+
+            with self.assertRaises(DeadlineExceededError):
+                run_paired_replication_study(
+                    dataset_a_path=dataset_a_path,
+                    sha256_a=sha_a,
+                    dataset_b_path=dataset_b_path,
+                    sha256_b=sha_b,
+                    probe_dataset_path=probe_path,
+                    sha256_probe=sha_probe,
+                    destination=dest_json,
+                    run_dir=run_dir,
+                    config=cfg,
+                )
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
+
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "DeadlineExceededError")
+            self.assertEqual(diag["current_stage"], "seed_102_phase_a")
+            self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+            self.assertFalse(os.path.exists(dest_json))
+
+    def test_paired_replication_evaluation_deadline_failure(self):
+        """
+        AGENTS.md Section 2.6, 8.4, 10: Evaluation-stage deadline failure.
+        Asserts DeadlineExceededError is raised during evaluation stage,
+        failure diagnostics preserve completed Phase A counters and artifacts,
+        failing seed is recorded as FAILED, remaining seeds are NOT_RUN.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_eval_deadline")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a_per_seed"] = 2
+            cfg["step_budget_b_per_arm"] = 4
+            cfg["step_budget_replay_per_arm"] = 1
+            cfg["step_budget_total_per_arm"] = 5
+            cfg["replay_ratio_b_to_a"] = [4, 1]
+            cfg["gate_g_lc_threshold"] = 0.0
+            cfg["wall_clock_ceiling_training_seconds_per_stage"] = 60.0
+            cfg["wall_clock_ceiling_eval_seconds_per_stage"] = -1.0  # Controlled immediate deadline failure
+
+            with self.assertRaises(DeadlineExceededError):
+                run_paired_replication_study(
+                    dataset_a_path=dataset_a_path,
+                    sha256_a=sha_a,
+                    dataset_b_path=dataset_b_path,
+                    sha256_b=sha_b,
+                    probe_dataset_path=probe_path,
+                    sha256_probe=sha_probe,
+                    destination=dest_json,
+                    run_dir=run_dir,
+                    config=cfg,
+                )
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
+
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "DeadlineExceededError")
+            self.assertEqual(diag["current_stage"], "seed_102_phase_a_eval")
+            self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+
+            # Preserved completed Phase A training counters and artifacts
+            s102_data = diag["seeds_data"]["102"]
+            self.assertIn("counters_phase_a", s102_data)
+            self.assertEqual(s102_data["counters_phase_a"]["rule_a_updates"], 2)
+            self.assertEqual(s102_data["counters_phase_a"]["rule_a_presentations"], 32)
+            self.assertIn("initial_fingerprint_phase_a", s102_data)
+            self.assertFalse(os.path.exists(dest_json))
+
+    def test_paired_replication_failure_preserves_artifacts_and_marks_later_seeds_not_run(self):
+        """
+        AGENTS.md Section 2.6, 8.4, 10: Multi-seed execution failure and zero retry.
+        Simulates failure on seed 103 after seed 102 completes.
+        Asserts:
+        - Seed 102 status is COMPLETED and its artifacts/counters are fully preserved.
+        - Seed 103 status is FAILED.
+        - Later seed 104 is marked NOT_RUN.
+        - No retry or replacement seeds occur.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_multiseed_fail")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_PAIRED_REPLICATION_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103, 104]
+            cfg["step_budget_a_per_seed"] = 2
+            cfg["step_budget_b_per_arm"] = 4
+            cfg["step_budget_replay_per_arm"] = 1
+            cfg["step_budget_total_per_arm"] = 5
+            cfg["replay_ratio_b_to_a"] = [4, 1]
+            cfg["replay_cycles"] = 1
+            cfg["gate_g_lc_threshold"] = 0.0
+
+            import research.lifelong_01.run_ssrl_paired_replication as runner_mod
+            orig_train = runner_mod.train_single_arm
+
+            def patched_train(state, sched, c, deadline, expected_fingerprint=None):
+                if runner_mod.sys._getframe(1).f_locals.get("seed") == 103:
+                    raise RuntimeError("Simulated fault during seed 103 training")
+                return orig_train(state, sched, c, deadline, expected_fingerprint)
+
+            runner_mod.train_single_arm = patched_train
+            try:
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_paired_replication_study(
+                        dataset_a_path=dataset_a_path,
+                        sha256_a=sha_a,
+                        dataset_b_path=dataset_b_path,
+                        sha256_b=sha_b,
+                        probe_dataset_path=probe_path,
+                        sha256_probe=sha_probe,
+                        destination=dest_json,
+                        run_dir=run_dir,
+                        config=cfg,
+                    )
+                self.assertIn("Simulated fault during seed 103 training", str(ctx.exception))
+            finally:
+                runner_mod.train_single_arm = orig_train
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
+
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "RuntimeError")
+            self.assertEqual(diag["seeds_status"]["102"], "COMPLETED")
+            self.assertEqual(diag["seeds_status"]["103"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["104"], "NOT_RUN")
+
+            # Preserved seed 102 completed artifacts and paired comparison
+            self.assertIn("102", diag["seeds_data"])
+            self.assertEqual(diag["seeds_data"]["102"]["paired_comparison"]["seed"], 102)
+            self.assertEqual(len(diag["paired_differences"]), 1)
+            self.assertFalse(os.path.exists(dest_json))
 
 
 if __name__ == "__main__":

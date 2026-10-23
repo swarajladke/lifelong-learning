@@ -46,6 +46,16 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_replay_step625_final.pt",
     # SSRL-05 pattern-diverse replay checkpoints
     "checkpoint_diverse_replay_step625_final.pt",
+    # SSRL-06 prospective paired replication checkpoints
+    "checkpoint_t1_post_a_s102.pt",
+    "checkpoint_t1_post_a_s103.pt",
+    "checkpoint_t1_post_a_s104.pt",
+    "checkpoint_lowest_id_final_s102.pt",
+    "checkpoint_lowest_id_final_s103.pt",
+    "checkpoint_lowest_id_final_s104.pt",
+    "checkpoint_diverse_replay_final_s102.pt",
+    "checkpoint_diverse_replay_final_s103.pt",
+    "checkpoint_diverse_replay_final_s104.pt",
 }
 MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 
