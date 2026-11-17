@@ -45,6 +45,13 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_diverse_replay_final_s102.pt",
     "checkpoint_diverse_replay_final_s103.pt",
     "checkpoint_diverse_replay_final_s104.pt",
+    # SSRL-07 sequential transfer controls checkpoints
+    "checkpoint_seq_b_s102.pt",
+    "checkpoint_seq_b_s103.pt",
+    "checkpoint_seq_b_s104.pt",
+    "checkpoint_fresh_b_s102.pt",
+    "checkpoint_fresh_b_s103.pt",
+    "checkpoint_fresh_b_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint

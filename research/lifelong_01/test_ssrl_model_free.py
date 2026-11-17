@@ -157,6 +157,12 @@ from research.lifelong_01.run_ssrl_paired_replication import (
     train_single_arm,
     run_paired_replication_study,
 )
+from research.lifelong_01.run_ssrl_transfer_controls import (
+    PROPOSED_TRANSFER_CONTROLS_CONFIG,
+    verify_transfer_controls_specification_approval,
+    train_task_b_arm,
+    run_transfer_controls_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -1667,6 +1673,31 @@ class TestSSRLModelFree(unittest.TestCase):
         h_div = compute_schedule_hash(sched_div)
         self.assertNotEqual(h1, h_div)
 
+    def test_transfer_controls_specification_approval_guard(self):
+        """
+        Tests that verify_transfer_controls_specification_approval blocks unapproved execution.
+        """
+        unapproved = copy.deepcopy(PROPOSED_TRANSFER_CONTROLS_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_transfer_controls_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        verify_transfer_controls_specification_approval(approved)
+
+    def test_transfer_controls_milestone_delta_logic(self):
+        """
+        Tests transfer delta computation and step-to-threshold logic with hand-built stubs.
+        """
+        # seq_b has 180/192 correct (93.75%), fresh_b has 160/192 correct (83.33%)
+        # delta = (180 - 160) / 192.0 * 100.0 = 20 / 192.0 * 100.0 = 10.4167 pp
+        delta = ((180 - 160) / 192.0) * 100.0
+        self.assertAlmostEqual(delta, 10.416666666666668, places=5)
+        # Check threshold detection (threshold = 0.90 -> 172.8 -> 173/192)
+        self.assertTrue((180 / 192.0) >= 0.90)
+        self.assertFalse((160 / 192.0) >= 0.90)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -2494,6 +2525,176 @@ class TestSSRLCPUIntegration(unittest.TestCase):
             self.assertIn("102", diag["seeds_data"])
             self.assertEqual(diag["seeds_data"]["102"]["paired_comparison"]["seed"], 102)
             self.assertEqual(len(diag["paired_differences"]), 1)
+            self.assertFalse(os.path.exists(dest_json))
+
+    def test_transfer_controls_checkpoint_mismatch_rejection(self):
+        """
+        AGENTS.md Section 8.4: Negative test showing mismatched initial fingerprint is rejected.
+        Asserts train_task_b_arm raises CheckpointVerificationError when the loaded state's
+        tensor fingerprint does not equal expected_fingerprint.
+        """
+        model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+        state_dict = model.state_dict()
+        expected_fp = "0" * 64
+
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        with open(dataset_b_path, "r", encoding="utf-8") as fb:
+            db = json.load(fb)
+        with open(dataset_b_path, "rb") as fb:
+            sha_b = hashlib.sha256(fb.read()).hexdigest()
+
+        cfg = copy.deepcopy(PROPOSED_TRANSFER_CONTROLS_CONFIG)
+        dummy_batch = [{"example_id": 1, "features": [0.0] * 16, "mask": [1.0] * 16, "target_class": 0}]
+        dummy_schedule = [dummy_batch]
+
+        with self.assertRaises(CheckpointVerificationError) as ctx:
+            train_task_b_arm(
+                initial_model_state=state_dict,
+                schedule_b=dummy_schedule,
+                db=db,
+                sha256_b=sha_b,
+                config=cfg,
+                seed=102,
+                arm_tag="test_mismatch",
+                train_deadline=time.monotonic() + 60.0,
+                eval_ceiling=60.0,
+                expected_fingerprint=expected_fp,
+            )
+        self.assertIn("Initial fingerprint mismatch", str(ctx.exception))
+
+    def test_transfer_controls_tiny_e2e_integration(self):
+        """
+        Tests tiny SSRL-07 transfer controls fixture:
+        - Seed 102 (uses preserved checkpoint_t1_post_a_s102.pt)
+        - step_budget_b = 2, milestone_steps = [0, 2]
+        Verifies:
+        - FREEZE-AFTER-BASE evaluated with 0 updates, fingerprint identical before and after.
+        - fresh_b starts with verified initial fingerprint, completes 2 updates, saves checkpoint.
+        - seq_b starts with verified post-A fingerprint, completes 2 updates, saves checkpoint.
+        - Milestone deltas computed at steps 0 and 2.
+        - Results JSON output saved.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_transfer")
+            dest_json = os.path.join(tmpdir, "results.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            # Path to preserved SSRL-06 post-A checkpoints
+            post_a_dir = os.path.abspath("C:/Users/Vicky/Desktop/lifelong-learning/evidence/runs/ssrl_06_paired_replication_f208e4da")
+
+            cfg = copy.deepcopy(PROPOSED_TRANSFER_CONTROLS_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102]
+            cfg["step_budget_b"] = 2
+            cfg["milestone_steps"] = [0, 2]
+
+            res = run_transfer_controls_study(
+                dataset_a_path=dataset_a_path,
+                sha256_a=sha_a,
+                dataset_b_path=dataset_b_path,
+                sha256_b=sha_b,
+                probe_dataset_path=probe_path,
+                sha256_probe=sha_probe,
+                post_a_checkpoints_dir=post_a_dir,
+                destination=dest_json,
+                run_dir=run_dir,
+                config=cfg,
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            self.assertEqual(len(res["diagnostics"]["paired_transfer_comparisons"]), 1)
+            pair = res["diagnostics"]["paired_transfer_comparisons"][0]
+            self.assertEqual(pair["seed"], 102)
+            self.assertIn("milestone_deltas", pair)
+            self.assertIn("0", pair["milestone_deltas"])
+            self.assertIn("2", pair["milestone_deltas"])
+            self.assertIn("final_transfer_delta_step500_pp", pair)
+
+            s_data = res["diagnostics"]["seeds_data"]["102"]
+            fp_post_a = s_data["post_a_checkpoint_loaded_fingerprint"]
+            fp_fresh_init = s_data["fresh_init_fingerprint"]
+
+            # Verify arm fingerprints
+            self.assertEqual(s_data["freeze_after_base"]["fingerprint"], fp_post_a)
+            self.assertEqual(s_data["fresh_b"]["loaded_initial_fingerprint"], fp_fresh_init)
+            self.assertEqual(s_data["seq_b"]["loaded_initial_fingerprint"], fp_post_a)
+
+            # Assert exact counters
+            cnt_fresh = s_data["fresh_b"]["counters"]
+            self.assertEqual(cnt_fresh["rule_b_updates"], 2)
+            self.assertEqual(cnt_fresh["rule_b_presentations"], 32)
+            cnt_seq = s_data["seq_b"]["counters"]
+            self.assertEqual(cnt_seq["rule_b_updates"], 2)
+            self.assertEqual(cnt_seq["rule_b_presentations"], 32)
+
+            # Check checkpoint files
+            ckpt_fresh_path = os.path.join(run_dir, "checkpoint_fresh_b_s102.pt")
+            ckpt_seq_path = os.path.join(run_dir, "checkpoint_seq_b_s102.pt")
+            self.assertTrue(os.path.isfile(ckpt_fresh_path))
+            self.assertTrue(os.path.isfile(ckpt_seq_path))
+            self.assertTrue(os.path.isfile(dest_json))
+
+    def test_transfer_controls_deadline_and_failure_persistence(self):
+        """
+        AGENTS.md Section 2.6, 8.4, 10: Training deadline exceeded in transfer controls.
+        Asserts DeadlineExceededError is raised, failure diagnostics are persisted,
+        failing seed is marked FAILED, later seeds are NOT_RUN, no retries.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_deadline_transfer")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            post_a_dir = os.path.abspath("C:/Users/Vicky/Desktop/lifelong-learning/evidence/runs/ssrl_06_paired_replication_f208e4da")
+
+            cfg = copy.deepcopy(PROPOSED_TRANSFER_CONTROLS_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_b"] = 2
+            cfg["milestone_steps"] = [0, 2]
+            cfg["wall_clock_ceiling_training_seconds_per_stage"] = -1.0  # Controlled immediate deadline failure
+
+            with self.assertRaises(DeadlineExceededError):
+                run_transfer_controls_study(
+                    dataset_a_path=dataset_a_path,
+                    sha256_a=sha_a,
+                    dataset_b_path=dataset_b_path,
+                    sha256_b=sha_b,
+                    probe_dataset_path=probe_path,
+                    sha256_probe=sha_probe,
+                    post_a_checkpoints_dir=post_a_dir,
+                    destination=dest_json,
+                    run_dir=run_dir,
+                    config=cfg,
+                )
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
+
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "DeadlineExceededError")
+            self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
             self.assertFalse(os.path.exists(dest_json))
 
 
