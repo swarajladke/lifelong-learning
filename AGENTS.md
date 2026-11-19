@@ -137,3 +137,15 @@ All scientific safeguards in Section 1 apply with equal force to local runs:
 - The researcher explicitly authorized the local SSRL-02 exact-protocol replay `ssrl_02_replay_eff8aa50`.
 - Execution of `ssrl_02_replay_eff8aa50` on the local workstation is classified as an authorized bounded run, not an authorization violation.
 - Its authentic local provenance, environment records, captured checkpoints, and probe results are preserved in place.
+
+---
+
+## 5. Living Human Review Board (`REVIEW_BOARD.md`)
+
+1. **Single Persistent Review File:** All prospective study proposals, code-change previews, and review requests requiring researcher `Yes / No` approval must be written into the single living file `REVIEW_BOARD.md` at the repository root. Agents must update (upgrade) `REVIEW_BOARD.md` in place for every new decision cycle rather than creating new standalone review or proposal files.
+2. **Mandatory Plain-English Contents:** Every pending decision in `REVIEW_BOARD.md` must present in plain English:
+   - Where the project stands and how the proposed step serves the main lifelong-learning goal;
+   - Exact proposed changes (files created/edited, model/training/evaluation changes, what stays fixed, parameter and resource accounting, and compute/wall-clock limits);
+   - **All possible outcomes of the test** (success, partial/trade-off, null/negative, and gate failure), what each outcome would prove, and what next step follows from each — never asserting an expected result as fact (Section 1.3);
+   - A clear **Yes / No** decision prompt.
+3. **Upgrade-in-Place Discipline:** Once a decision is executed and verified, move its concise, artifact-backed summary (citing exact commit SHA and run directory) into the **Completed Decisions & Study Log** section of `REVIEW_BOARD.md`, and replace the top **Current Pending Decision** section with the next proposal. Raw run artifacts in `evidence/runs/` remain strictly immutable (Section 4.4).

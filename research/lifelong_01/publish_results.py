@@ -76,6 +76,19 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_l2init_diverse_replay_s102.pt",
     "checkpoint_l2init_diverse_replay_s103.pt",
     "checkpoint_l2init_diverse_replay_s104.pt",
+    # SSRL-09 conditioned MLP (LayerNorm + gate) checkpoints
+    "checkpoint_cond_post_a_s102.pt",
+    "checkpoint_cond_post_a_s103.pt",
+    "checkpoint_cond_post_a_s104.pt",
+    "checkpoint_cond_fresh_b_s102.pt",
+    "checkpoint_cond_fresh_b_s103.pt",
+    "checkpoint_cond_fresh_b_s104.pt",
+    "checkpoint_cond_seq_b_s102.pt",
+    "checkpoint_cond_seq_b_s103.pt",
+    "checkpoint_cond_seq_b_s104.pt",
+    "checkpoint_cond_diverse_replay_s102.pt",
+    "checkpoint_cond_diverse_replay_s103.pt",
+    "checkpoint_cond_diverse_replay_s104.pt",
 }
 MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 

@@ -123,7 +123,11 @@ from research.lifelong_01.ssrl_reproduction_check import (
     verify_aligned_reproduction,
     ReproductionDivergenceError,
 )
-from research.lifelong_01.ssrl_model import SSRLInstructionMLP
+from research.lifelong_01.ssrl_model import (
+    SSRLInstructionMLP,
+    SSRLConditionedMLP,
+    get_conditioned_parameter_count,
+)
 from research.lifelong_01.run_ssrl_joint_reference import (
     interleave_minibatch_schedules,
     load_and_verify_initial_model,
@@ -171,6 +175,12 @@ from research.lifelong_01.run_ssrl_l2_init_plasticity import (
     clone_frozen_init_params,
     compute_l2_init_penalty,
     run_l2_init_plasticity_study,
+)
+from research.lifelong_01.run_ssrl_conditioned_mlp import (
+    PROPOSED_CONDITIONED_MLP_CONFIG,
+    verify_conditioned_mlp_specification_approval,
+    run_conditioned_mlp_study,
+    EVAL_MODE_CONDITIONED,
 )
 
 
@@ -1767,6 +1777,41 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_conditioned_mlp_specification_approval_guard(self):
+        """
+        Tests that verify_conditioned_mlp_specification_approval blocks unapproved
+        execution and accepts APPROVED configurations.
+        """
+        unapproved = copy.deepcopy(PROPOSED_CONDITIONED_MLP_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_conditioned_mlp_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        verify_conditioned_mlp_specification_approval(approved)
+
+    def test_conditioned_mlp_parameter_count_formula(self):
+        """
+        Model-free unit test checking get_conditioned_parameter_count() exact arithmetic.
+        """
+        self.assertEqual(get_conditioned_parameter_count(), 6722)
+        self.assertEqual(get_conditioned_parameter_count(16, 16, 64, 2), 6722)
+
+    def test_conditioned_mlp_checkpoint_allowlist_sync(self):
+        """
+        Tests that all 12 SSRL-09 checkpoint filenames exist in both ssrl_checkpoints
+        and publish_results allowlists.
+        """
+        expected_ckpts = []
+        for arm in ["post_a", "fresh_b", "seq_b", "diverse_replay"]:
+            for seed in [102, 103, 104]:
+                expected_ckpts.append(f"checkpoint_cond_{arm}_s{seed}.pt")
+        self.assertEqual(len(expected_ckpts), 12)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -2939,6 +2984,172 @@ class TestSSRLCPUIntegration(unittest.TestCase):
             self.assertEqual(diag["seeds_status"]["102"], "FAILED")
             self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
             self.assertFalse(os.path.exists(dest_json))
+
+    def test_conditioned_mlp_forward_and_param_count_match(self):
+        """
+        CPU integration test verifying SSRLConditionedMLP parameter count (6722),
+        forward shape (4, 32) -> (4, 2), sensitivity to mask changes, and wrong-dim ValueError.
+        """
+        torch.manual_seed(102)
+        model = SSRLConditionedMLP()
+        param_count = sum(p.numel() for p in model.parameters())
+        self.assertEqual(param_count, 6722)
+        self.assertEqual(param_count, get_conditioned_parameter_count())
+
+        feat = torch.tensor([[1.0, -1.0] * 8] * 4, dtype=torch.float32)
+        mask_a = torch.tensor([[1.0] * 4 + [0.0] * 12] * 4, dtype=torch.float32)
+        mask_b = torch.tensor([[0.0] * 4 + [1.0] * 4 + [0.0] * 8] * 4, dtype=torch.float32)
+        u_a = torch.cat([feat, mask_a], dim=1)
+        u_b = torch.cat([feat, mask_b], dim=1)
+
+        model.eval()
+        with torch.no_grad():
+            out_a = model(u_a)
+            out_b = model(u_b)
+        self.assertEqual(tuple(out_a.shape), (4, 2))
+        self.assertEqual(tuple(out_b.shape), (4, 2))
+        self.assertFalse(torch.allclose(out_a, out_b))
+
+        with self.assertRaises(ValueError):
+            model(torch.zeros((2, 31), dtype=torch.float32))
+
+    def test_conditioned_mlp_tiny_e2e_integration(self):
+        """
+        Tiny CPU integration test for SSRL-09 (Seed 102, 4 A steps, 4 B steps, 5 diverse_replay steps).
+        Verifies all 4 arms, fingerprints, compact boolean lengths (192/64/128), eval_layernorm_no_dropout
+        mode tag, mechanism + gate separation snapshots, 4 checkpoints, and pre-upload validation (< 1 MB).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_cond")
+            dest_json = os.path.join(run_dir, "results.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_CONDITIONED_MLP_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102]
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 4
+            cfg["milestone_b_steps"] = [0, 4]
+            cfg["enforce_post_a_learnability_gate"] = False
+            cfg["enforce_fresh_b_learnability_gate"] = False
+
+            res = run_conditioned_mlp_study(
+                dataset_a_path=dataset_a_path, sha256_a=sha_a,
+                dataset_b_path=dataset_b_path, sha256_b=sha_b,
+                probe_dataset_path=probe_path, sha256_probe=sha_probe,
+                destination=dest_json, run_dir=run_dir, config=cfg,
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            s_data = res["diagnostics"]["seeds_data"]["102"]
+            fp_init = s_data["fresh_init_fingerprint"]
+            fp_post_a = s_data["phase_a"]["checkpoint"]["tensor_fingerprint"]
+
+            self.assertEqual(s_data["freeze_after_base"]["fingerprint"], fp_post_a)
+            self.assertEqual(s_data["fresh_b"]["loaded_initial_fingerprint"], fp_init)
+            self.assertEqual(s_data["seq_b"]["loaded_initial_fingerprint"], fp_post_a)
+            self.assertEqual(s_data["diverse_replay"]["loaded_initial_fingerprint"], fp_post_a)
+
+            cnt_div = s_data["diverse_replay"]["counters"]
+            self.assertEqual(cnt_div["rule_b_updates"], 4)
+            self.assertEqual(cnt_div["replay_a_updates"], 1)
+            self.assertEqual(cnt_div["total_optimizer_steps"], 5)
+            self.assertEqual(cnt_div["total_presentations"], 80)
+
+            for snap in [
+                s_data["mechanism_fresh_init"],
+                s_data["phase_a"]["mechanism_post_a"],
+                s_data["fresh_b"]["mechanism_snapshot"],
+                s_data["seq_b"]["mechanism_snapshot"],
+                s_data["diverse_replay"]["mechanism_snapshot"],
+            ]:
+                for k in ["parameter_count", "global_l2", "fc1_feat_weight_l2", "fc1_gate_weight_l2",
+                          "gate_a_mean", "gate_b_mean", "gate_ab_cosine_similarity", "gate_ab_l2_distance",
+                          "mean_abs_logit_margin_b", "cross_entropy_loss_b", "h1_dead_relu_count", "h2_dead_relu_count"]:
+                    self.assertIn(k, snap)
+                self.assertEqual(snap["parameter_count"], 6722)
+
+            for arm_eval in [
+                s_data["freeze_after_base"]["eval"],
+                s_data["fresh_b"]["final_eval"],
+                s_data["seq_b"]["final_eval"],
+                s_data["diverse_replay"]["final_eval"],
+            ]:
+                self.assertEqual(arm_eval["mode"], EVAL_MODE_CONDITIONED)
+                self.assertEqual(arm_eval["metrics"]["acc_rule_a_seen"].mode, "eval_layernorm_no_dropout")
+                pops = arm_eval["per_unit_populations"]
+                self.assertEqual(len(pops["rule_a_seen"]["is_correct"]), 192)
+                self.assertEqual(len(pops["rule_a_unseen"]["is_correct"]), 64)
+                self.assertEqual(len(pops["rule_b_seen"]["is_correct"]), 192)
+                self.assertEqual(len(pops["rule_b_unseen"]["is_correct"]), 64)
+                self.assertEqual(len(arm_eval["counterfactual_probe"]["pair_records"]), 128)
+                self.assertNotIn("features", arm_eval["counterfactual_probe"]["pair_records"][0])
+
+            for arm in ["post_a", "fresh_b", "seq_b", "diverse_replay"]:
+                self.assertTrue(os.path.isfile(os.path.join(run_dir, f"checkpoint_cond_{arm}_s102.pt")))
+            run_bytes = calculate_and_verify_run_size(run_dir)
+            self.assertLess(run_bytes, 1024 * 1024)
+            verify_no_forbidden_files(run_dir)
+
+    def test_conditioned_mlp_learnability_gate_and_deadline_failure(self):
+        """
+        Verifies both LearnabilityGateError (step_budget_a=1, gate True) and DeadlineExceededError
+        (-1.0s ceiling) persist failure_diagnostics.json with 102=FAILED, 103=NOT_RUN, no results.json.
+        """
+        dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+        dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+        probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+        with open(dataset_a_path, "rb") as fa:
+            sha_a = hashlib.sha256(fa.read()).hexdigest()
+        with open(dataset_b_path, "rb") as fb:
+            sha_b = hashlib.sha256(fb.read()).hexdigest()
+        with open(probe_path, "rb") as fp_file:
+            sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+        cases = [
+            ("gate_fail", 1, 60.0, True, LearnabilityGateError, "LearnabilityGateError"),
+            ("deadline_fail", 4, -1.0, False, DeadlineExceededError, "DeadlineExceededError"),
+        ]
+        for subdir, steps_a, train_ceil, gate_on, exc_cls, exc_name in cases:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                run_dir = os.path.join(tmpdir, f"run_{subdir}")
+                dest_json = os.path.join(tmpdir, "results.json")
+                diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+                cfg = copy.deepcopy(PROPOSED_CONDITIONED_MLP_CONFIG)
+                cfg["gate_approval_status"] = "APPROVED"
+                cfg["seeds"] = [102, 103]
+                cfg["step_budget_a"] = steps_a
+                cfg["step_budget_b"] = 4
+                cfg["milestone_b_steps"] = [0, 4]
+                cfg["enforce_post_a_learnability_gate"] = gate_on
+                cfg["wall_clock_ceiling_training_seconds_per_stage"] = train_ceil
+
+                with self.assertRaises(exc_cls):
+                    run_conditioned_mlp_study(
+                        dataset_a_path=dataset_a_path, sha256_a=sha_a,
+                        dataset_b_path=dataset_b_path, sha256_b=sha_b,
+                        probe_dataset_path=probe_path, sha256_probe=sha_probe,
+                        destination=dest_json, run_dir=run_dir, config=cfg,
+                    )
+
+                self.assertTrue(os.path.isfile(diag_file))
+                with open(diag_file, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
 
 
 if __name__ == "__main__":
