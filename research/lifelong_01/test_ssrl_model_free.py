@@ -105,6 +105,7 @@ from research.lifelong_01.publish_results import (
     verify_no_forbidden_files,
     publish_run_artifacts,
     MAX_ALLOWED_RUN_BYTES,
+    ALLOWED_CHECKPOINT_FILENAMES as PUBLISH_ALLOWED_CHECKPOINT_FILENAMES,
 )
 from research.lifelong_01.ssrl_counterfactual_probe import (
     generate_counterfactual_probe_dataset,
@@ -162,6 +163,14 @@ from research.lifelong_01.run_ssrl_transfer_controls import (
     verify_transfer_controls_specification_approval,
     train_task_b_arm,
     run_transfer_controls_study,
+)
+from research.lifelong_01.run_ssrl_l2_init_plasticity import (
+    PROPOSED_L2_INIT_PLASTICITY_CONFIG,
+    LearnabilityGateError,
+    verify_l2_init_specification_approval,
+    clone_frozen_init_params,
+    compute_l2_init_penalty,
+    run_l2_init_plasticity_study,
 )
 
 
@@ -1698,6 +1707,66 @@ class TestSSRLModelFree(unittest.TestCase):
         self.assertTrue((180 / 192.0) >= 0.90)
         self.assertFalse((160 / 192.0) >= 0.90)
 
+    def test_l2_init_specification_approval_guard(self):
+        """
+        Tests that verify_l2_init_specification_approval blocks unapproved execution
+        and accepts APPROVED configs.
+        """
+        unapproved = copy.deepcopy(PROPOSED_L2_INIT_PLASTICITY_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_l2_init_specification_approval(unapproved)
+
+        approved = copy.deepcopy(unapproved)
+        approved["gate_approval_status"] = "APPROVED"
+        verify_l2_init_specification_approval(approved)
+
+    def test_l2_init_penalty_zero_at_init_and_positive_after_perturbation(self):
+        """
+        Model-free unit test on a tiny handcrafted linear stub verifying L2-Init penalty:
+        - Exact 0.0 value and zero gradients when theta == theta_0.
+        - Exact hand-computed 0.5 * lambda * sum((theta - theta_0)^2) after perturbation.
+        - Negative lambda raises ValueError.
+        """
+        stub = torch.nn.Linear(2, 1)
+        with torch.no_grad():
+            stub.weight.copy_(torch.tensor([[1.0, 2.0]]))
+            stub.bias.copy_(torch.tensor([0.0]))
+        init_params, _ = clone_frozen_init_params(stub)
+
+        # At init: penalty == 0.0 and gradients == 0.0
+        p0 = compute_l2_init_penalty(stub, init_params, l2_init_lambda=0.01)
+        self.assertAlmostEqual(float(p0.item()), 0.0, places=7)
+        p0.backward()
+        self.assertTrue(torch.all(stub.weight.grad == 0.0))
+        self.assertTrue(torch.all(stub.bias.grad == 0.0))
+        stub.zero_grad()
+
+        # Perturb weights by delta = [[1.0, 2.0]] and bias by delta = [3.0] -> sum_sq = 1 + 4 + 9 = 14
+        # With lambda = 0.2: penalty = 0.5 * 0.2 * 14 = 1.4
+        with torch.no_grad():
+            stub.weight.copy_(torch.tensor([[2.0, 4.0]]))
+            stub.bias.copy_(torch.tensor([3.0]))
+        p1 = compute_l2_init_penalty(stub, init_params, l2_init_lambda=0.2)
+        self.assertAlmostEqual(float(p1.item()), 1.4, places=6)
+
+        with self.assertRaises(ValueError):
+            compute_l2_init_penalty(stub, init_params, l2_init_lambda=-0.01)
+
+    def test_l2_init_checkpoint_allowlist_sync(self):
+        """
+        Tests that all 12 SSRL-08 checkpoint filenames exist in both ssrl_checkpoints
+        and publish_results allowlists.
+        """
+        expected_ckpts = []
+        for arm in ["post_a", "fresh_b", "seq_b", "diverse_replay"]:
+            for seed in [102, 103, 104]:
+                expected_ckpts.append(f"checkpoint_l2init_{arm}_s{seed}.pt")
+        self.assertEqual(len(expected_ckpts), 12)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -2691,6 +2760,180 @@ class TestSSRLCPUIntegration(unittest.TestCase):
             with open(diag_file, "r", encoding="utf-8") as f:
                 diag = json.load(f)["diagnostics"]
 
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "DeadlineExceededError")
+            self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+            self.assertFalse(os.path.exists(dest_json))
+
+    def test_l2_init_tiny_e2e_integration(self):
+        """
+        Tiny CPU integration test for SSRL-08 (Seed 102, 4 A steps, 4 B steps, 5 diverse_replay steps).
+        Verifies all 4 arms, fingerprints, compact per-unit boolean lengths (192/64/128), mechanism
+        snapshots, 4 checkpoints, and pre-upload validation passing well under 1 MB.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_e2e_l2init")
+            dest_json = os.path.join(run_dir, "results.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_L2_INIT_PLASTICITY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102]
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 4
+            cfg["milestone_b_steps"] = [0, 4]
+            cfg["enforce_post_a_learnability_gate"] = False
+            cfg["enforce_fresh_b_learnability_gate"] = False
+
+            res = run_l2_init_plasticity_study(
+                dataset_a_path=dataset_a_path, sha256_a=sha_a,
+                dataset_b_path=dataset_b_path, sha256_b=sha_b,
+                probe_dataset_path=probe_path, sha256_probe=sha_probe,
+                destination=dest_json, run_dir=run_dir, config=cfg,
+            )
+
+            self.assertEqual(res["diagnostics"]["status"], "COMPLETED")
+            s_data = res["diagnostics"]["seeds_data"]["102"]
+            fp_init = s_data["fresh_init_fingerprint"]
+            fp_post_a = s_data["phase_a"]["checkpoint"]["tensor_fingerprint"]
+
+            self.assertEqual(s_data["freeze_after_base"]["fingerprint"], fp_post_a)
+            self.assertEqual(s_data["fresh_b"]["loaded_initial_fingerprint"], fp_init)
+            self.assertEqual(s_data["seq_b"]["loaded_initial_fingerprint"], fp_post_a)
+            self.assertEqual(s_data["diverse_replay"]["loaded_initial_fingerprint"], fp_post_a)
+
+            # Verify exact counters including 4 B + 1 A = 5 steps for diverse_replay
+            self.assertEqual(s_data["phase_a"]["counters"]["rule_a_updates"], 4)
+            self.assertEqual(s_data["fresh_b"]["counters"]["rule_b_updates"], 4)
+            self.assertEqual(s_data["seq_b"]["counters"]["rule_b_updates"], 4)
+            cnt_div = s_data["diverse_replay"]["counters"]
+            self.assertEqual(cnt_div["rule_b_updates"], 4)
+            self.assertEqual(cnt_div["replay_a_updates"], 1)
+            self.assertEqual(cnt_div["total_optimizer_steps"], 5)
+            self.assertEqual(cnt_div["total_presentations"], 80)
+
+            # Verify mechanism snapshots
+            for key in ["global_l2", "mean_abs_logit_margin_b", "cross_entropy_loss_b", "h1_dead_relu_count", "h2_dead_relu_count"]:
+                self.assertIn(key, s_data["mechanism_fresh_init"])
+                self.assertIn(key, s_data["phase_a"]["mechanism_post_a"])
+
+            # Verify compact per-unit boolean vector lengths (192/64/128)
+            for arm_eval in [
+                s_data["freeze_after_base"]["eval"],
+                s_data["fresh_b"]["final_eval"],
+                s_data["seq_b"]["final_eval"],
+                s_data["diverse_replay"]["final_eval"],
+            ]:
+                pops = arm_eval["per_unit_populations"]
+                self.assertEqual(len(pops["rule_a_seen"]["is_correct"]), 192)
+                self.assertEqual(len(pops["rule_a_unseen"]["is_correct"]), 64)
+                self.assertEqual(len(pops["rule_b_seen"]["is_correct"]), 192)
+                self.assertEqual(len(pops["rule_b_unseen"]["is_correct"]), 64)
+                self.assertEqual(len(arm_eval["counterfactual_probe"]["pair_records"]), 128)
+                self.assertNotIn("features", arm_eval["counterfactual_probe"]["pair_records"][0])
+
+            # Verify 4 checkpoint files and publish pre-upload validation (< 1 MB)
+            for arm in ["post_a", "fresh_b", "seq_b", "diverse_replay"]:
+                self.assertTrue(os.path.isfile(os.path.join(run_dir, f"checkpoint_l2init_{arm}_s102.pt")))
+            run_bytes = calculate_and_verify_run_size(run_dir)
+            self.assertLess(run_bytes, 1024 * 1024)
+            verify_no_forbidden_files(run_dir)
+
+    def test_l2_init_learnability_gate_rejection(self):
+        """
+        Negative test: step_budget_a=1 with enforce_post_a_learnability_gate=True fails Gate G-LC,
+        raises LearnabilityGateError, persists failure_diagnostics.json (102=FAILED, 103=NOT_RUN),
+        and prevents final results.json creation.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_gate_fail_l2init")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_L2_INIT_PLASTICITY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a"] = 1
+            cfg["step_budget_b"] = 4
+            cfg["milestone_b_steps"] = [0, 4]
+            cfg["enforce_post_a_learnability_gate"] = True
+
+            with self.assertRaises(LearnabilityGateError):
+                run_l2_init_plasticity_study(
+                    dataset_a_path=dataset_a_path, sha256_a=sha_a,
+                    dataset_b_path=dataset_b_path, sha256_b=sha_b,
+                    probe_dataset_path=probe_path, sha256_probe=sha_probe,
+                    destination=dest_json, run_dir=run_dir, config=cfg,
+                )
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
+            self.assertEqual(diag["status"], "FAILED")
+            self.assertEqual(diag["error_type"], "LearnabilityGateError")
+            self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+            self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+            self.assertFalse(os.path.exists(dest_json))
+
+    def test_l2_init_deadline_failure_persistence(self):
+        """
+        Negative test: negative wall-clock deadline raises DeadlineExceededError,
+        persists failure_diagnostics.json with 102=FAILED and 103=NOT_RUN, no results.json.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = os.path.join(tmpdir, "run_deadline_fail_l2init")
+            dest_json = os.path.join(tmpdir, "results.json")
+            diag_file = os.path.join(run_dir, "failure_diagnostics.json")
+
+            dataset_a_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t1_s101.json")
+            dataset_b_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_pilot_t2_s101.json")
+            probe_path = os.path.join(os.path.dirname(__file__), "data", "ssrl_probe_counterfactual_128.json")
+            with open(dataset_a_path, "rb") as fa:
+                sha_a = hashlib.sha256(fa.read()).hexdigest()
+            with open(dataset_b_path, "rb") as fb:
+                sha_b = hashlib.sha256(fb.read()).hexdigest()
+            with open(probe_path, "rb") as fp_file:
+                sha_probe = hashlib.sha256(fp_file.read()).hexdigest()
+
+            cfg = copy.deepcopy(PROPOSED_L2_INIT_PLASTICITY_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 4
+            cfg["milestone_b_steps"] = [0, 4]
+            cfg["wall_clock_ceiling_training_seconds_per_stage"] = -1.0
+
+            with self.assertRaises(DeadlineExceededError):
+                run_l2_init_plasticity_study(
+                    dataset_a_path=dataset_a_path, sha256_a=sha_a,
+                    dataset_b_path=dataset_b_path, sha256_b=sha_b,
+                    probe_dataset_path=probe_path, sha256_probe=sha_probe,
+                    destination=dest_json, run_dir=run_dir, config=cfg,
+                )
+
+            self.assertTrue(os.path.isfile(diag_file))
+            with open(diag_file, "r", encoding="utf-8") as f:
+                diag = json.load(f)["diagnostics"]
             self.assertEqual(diag["status"], "FAILED")
             self.assertEqual(diag["error_type"], "DeadlineExceededError")
             self.assertEqual(diag["seeds_status"]["102"], "FAILED")

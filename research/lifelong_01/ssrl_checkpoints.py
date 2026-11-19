@@ -52,6 +52,19 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_fresh_b_s102.pt",
     "checkpoint_fresh_b_s103.pt",
     "checkpoint_fresh_b_s104.pt",
+    # SSRL-08 L2-Init plasticity & replay checkpoints
+    "checkpoint_l2init_post_a_s102.pt",
+    "checkpoint_l2init_post_a_s103.pt",
+    "checkpoint_l2init_post_a_s104.pt",
+    "checkpoint_l2init_fresh_b_s102.pt",
+    "checkpoint_l2init_fresh_b_s103.pt",
+    "checkpoint_l2init_fresh_b_s104.pt",
+    "checkpoint_l2init_seq_b_s102.pt",
+    "checkpoint_l2init_seq_b_s103.pt",
+    "checkpoint_l2init_seq_b_s104.pt",
+    "checkpoint_l2init_diverse_replay_s102.pt",
+    "checkpoint_l2init_diverse_replay_s103.pt",
+    "checkpoint_l2init_diverse_replay_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint
