@@ -182,6 +182,15 @@ from research.lifelong_01.run_ssrl_conditioned_mlp import (
     run_conditioned_mlp_study,
     EVAL_MODE_CONDITIONED,
 )
+from research.lifelong_01.run_ssrl_l2init_der import (
+    PROPOSED_L2INIT_DER_CONFIG,
+    verify_l2init_der_specification_approval,
+    capture_frozen_teacher_logits,
+    compute_der_logit_loss,
+    evaluate_buffer_logit_drift,
+    run_l2init_der_study,
+    EVAL_MODE_DETERMINISTIC,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -1812,6 +1821,82 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_l2init_der_specification_approval_guard(self):
+        """
+        Tests that verify_l2init_der_specification_approval blocks unapproved
+        execution, verifies pinned hyperparameters, and accepts APPROVED configurations.
+        """
+        self.assertEqual(PROPOSED_L2INIT_DER_CONFIG["study_id"], "SSRL-10")
+        self.assertAlmostEqual(PROPOSED_L2INIT_DER_CONFIG["l2_init_lambda"], 0.01)
+        self.assertAlmostEqual(PROPOSED_L2INIT_DER_CONFIG["der_alpha"], 0.5)
+        self.assertEqual(PROPOSED_L2INIT_DER_CONFIG["expected_parameter_count"], 6402)
+        unapproved = copy.deepcopy(PROPOSED_L2INIT_DER_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_l2init_der_specification_approval(unapproved)
+        approved_cfg = copy.deepcopy(unapproved)
+        approved_cfg["gate_approval_status"] = "APPROVED"
+        verify_l2init_der_specification_approval(approved_cfg)
+
+    def test_der_logit_loss_zero_at_match_and_exact_mse(self):
+        """
+        Tests capture_frozen_teacher_logits, example_id-aligned compute_der_logit_loss
+        (0.0 when matched, exact MSE when shifted), and evaluate_buffer_logit_drift.
+        """
+        torch.manual_seed(77)
+        model = SSRLInstructionMLP(input_dim=32, hidden_dim=64, output_dim=2)
+        fp = compute_tensor_fingerprint_from_state_dict(model.state_dict())
+
+        buffer_examples = [
+            {"example_id": 10, "features": [1] * 16, "mask": [1, 1, 1, 1] + [0] * 12},
+            {"example_id": 20, "features": [-1] * 16, "mask": [1, 1, 1, 1] + [0] * 12},
+            {"example_id": 30, "features": [1, -1] * 8, "mask": [1, 1, 1, 1] + [0] * 12},
+        ]
+        teacher_by_id, teacher_fp, num_floats = capture_frozen_teacher_logits(model, buffer_examples, fp)
+        self.assertEqual(num_floats, 6)
+        self.assertEqual(set(teacher_by_id.keys()), {10, 20, 30})
+        self.assertEqual(len(teacher_fp), 64)
+
+        with self.assertRaises(CheckpointVerificationError):
+            capture_frozen_teacher_logits(model, buffer_examples, "0" * 64)
+
+        reordered_batch = [buffer_examples[2], buffer_examples[0], buffer_examples[1]]
+        matched_logits = torch.stack([teacher_by_id[int(ex["example_id"])] for ex in reordered_batch], dim=0)
+        zero_loss = compute_der_logit_loss(matched_logits, reordered_batch, teacher_by_id)
+        self.assertAlmostEqual(float(zero_loss.item()), 0.0, places=7)
+
+        delta = torch.tensor([[0.25, -0.50], [1.00, 0.00], [-0.50, 0.50]], dtype=torch.float32)
+        shifted_logits = matched_logits + delta
+        expected_mse = float((delta ** 2).mean().item())
+        actual_mse = float(compute_der_logit_loss(shifted_logits, reordered_batch, teacher_by_id).item())
+        self.assertAlmostEqual(actual_mse, expected_mse, places=6)
+
+        with self.assertRaises(KeyError):
+            compute_der_logit_loss(matched_logits[:1], [{"example_id": 999}], teacher_by_id)
+
+        drift = evaluate_buffer_logit_drift(model, buffer_examples, teacher_by_id)
+        self.assertEqual(drift["execution_mode"], EVAL_MODE_DETERMINISTIC)
+        self.assertEqual(drift["buffer_size"], 3)
+        self.assertEqual(drift["num_logit_floats"], 6)
+        self.assertAlmostEqual(drift["mse_logit_drift"], 0.0, places=7)
+        self.assertAlmostEqual(drift["max_abs_logit_drift"], 0.0, places=7)
+        self.assertEqual(drift["argmax_match_numerator"], 3)
+        self.assertEqual(drift["argmax_match_denominator"], 3)
+
+    def test_l2init_der_checkpoint_allowlist_sync(self):
+        """
+        Tests that all 12 SSRL-10 checkpoint filenames exist in both ssrl_checkpoints
+        and publish_results allowlists.
+        """
+        expected_ckpts = []
+        for arm in ["post_a", "fresh_b", "seq_b", "diverse_der"]:
+            for seed in [102, 103, 104]:
+                expected_ckpts.append(f"checkpoint_der_{arm}_s{seed}.pt")
+        self.assertEqual(len(expected_ckpts), 12)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -3144,6 +3229,152 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
                 self.assertTrue(os.path.isfile(diag_file))
                 with open(diag_file, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def _build_temp_ssrl10_inputs(self, tmpdir: str):
+        import hashlib
+        from research.lifelong_01.ssrl_generator import (
+            generate_pilot_dataset_dict,
+            serialize_dataset_canonical_json,
+        )
+        from research.lifelong_01.ssrl_counterfactual_probe import generate_counterfactual_probe_dataset
+
+        da = generate_pilot_dataset_dict(
+            rule_indices=(0, 1, 2, 3),
+            rule_id=1,
+            seed=101,
+            partition_seed=42,
+            study_id="SSRL-01",
+            phase="learnability_pilot",
+        )
+        db = generate_pilot_dataset_dict(
+            rule_indices=(4, 5, 6, 7),
+            rule_id=2,
+            seed=101,
+            partition_seed=43,
+            study_id="SSRL-02",
+            phase="two_rule_diagnostic",
+        )
+        dp = generate_counterfactual_probe_dataset(da, db, seed=3030)
+
+        path_a = os.path.join(tmpdir, "dataset_a.json")
+        path_b = os.path.join(tmpdir, "dataset_b.json")
+        path_p = os.path.join(tmpdir, "probe.json")
+        sha_a = serialize_dataset_canonical_json(da, path_a)
+        sha_b = serialize_dataset_canonical_json(db, path_b)
+        raw_p = json.dumps(dp, indent=2, sort_keys=True).encode("utf-8")
+        sha_p = hashlib.sha256(raw_p).hexdigest()
+        with open(path_p, "wb") as f:
+            f.write(raw_p)
+        return path_a, sha_a, path_b, sha_b, path_p, sha_p
+
+    def test_l2init_der_tiny_e2e_integration(self):
+        """
+        Tests SSRL-10 L2-Init + DER++ tiny CPU end-to-end execution across 2 seeds and all 4 arms,
+        verifying checkpoint creation, teacher logit metadata (32 floats / 128 bytes), DER counters,
+        buffer logit drift on seq_b and diverse_der, and output serialization.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a, sha_a, path_b, sha_b, path_p, sha_p = self._build_temp_ssrl10_inputs(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_L2INIT_DER_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 4
+            cfg["milestone_b_steps"] = [0, 2, 4]
+            cfg["enforce_post_a_learnability_gate"] = False
+            cfg["enforce_fresh_b_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl10_run")
+            dest_json = os.path.join(tmpdir, "ssrl10_results.json")
+            res = run_l2init_der_study(
+                dataset_a_path=path_a,
+                sha256_a=sha_a,
+                dataset_b_path=path_b,
+                sha256_b=sha_b,
+                probe_dataset_path=path_p,
+                sha256_probe=sha_p,
+                destination=dest_json,
+                run_dir=run_dir,
+                config=cfg,
+            )
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_transfer_comparisons"]), 2)
+
+            for seed in [102, 103]:
+                sdata = diag["seeds_data"][str(seed)]
+                self.assertEqual(sdata["phase_a"]["teacher_logits_num_floats"], 32)
+                self.assertEqual(sdata["phase_a"]["teacher_logits_bytes_float32"], 128)
+                self.assertEqual(len(sdata["phase_a"]["teacher_logits_fingerprint"]), 64)
+
+                seq_drift = sdata["seq_b"]["buffer_logit_drift"]
+                der_drift = sdata["diverse_der"]["buffer_logit_drift"]
+                self.assertEqual(seq_drift["argmax_match_denominator"], 16)
+                self.assertEqual(der_drift["argmax_match_denominator"], 16)
+                self.assertEqual(der_drift["num_logit_floats"], 32)
+                self.assertGreaterEqual(sdata["diverse_der"]["counters"]["der_loss_steps"], 1)
+                self.assertEqual(sdata["seq_b"]["counters"]["der_loss_steps"], 0)
+                for arm in ["post_a", "fresh_b", "seq_b", "diverse_der"]:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_der_{arm}_s{seed}.pt")))
+
+            self.assertIn("buffer_logit_drift_mse_seq_b", diag["summary_statistics"])
+            self.assertIn("buffer_logit_drift_mse_diverse_der", diag["summary_statistics"])
+
+    def test_l2init_der_learnability_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-10 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a, sha_a, path_b, sha_b, path_p, sha_p = self._build_temp_ssrl10_inputs(tmpdir)
+
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED",
+                    "seeds": [102, 103],
+                    "step_budget_a": 2,
+                    "step_budget_b": 4,
+                    "milestone_b_steps": [0, 4],
+                    "gate_g_lc_threshold": 0.99,
+                    "enforce_post_a_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED",
+                    "seeds": [102, 103],
+                    "step_budget_a": 2,
+                    "step_budget_b": 4,
+                    "milestone_b_steps": [0, 4],
+                    "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_L2INIT_DER_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_l2init_der_study(
+                        dataset_a_path=path_a,
+                        sha256_a=sha_a,
+                        dataset_b_path=path_b,
+                        sha256_b=sha_b,
+                        probe_dataset_path=path_p,
+                        sha256_probe=sha_p,
+                        destination=dest_json,
+                        run_dir=run_dir,
+                        config=cfg,
+                    )
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
                     diag = json.load(f)["diagnostics"]
                 self.assertEqual(diag["status"], "FAILED")
                 self.assertEqual(diag["error_type"], exc_name)

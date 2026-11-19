@@ -78,6 +78,19 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_cond_diverse_replay_s102.pt",
     "checkpoint_cond_diverse_replay_s103.pt",
     "checkpoint_cond_diverse_replay_s104.pt",
+    # SSRL-10 L2-Init + Dark Experience Replay (DER++) checkpoints
+    "checkpoint_der_post_a_s102.pt",
+    "checkpoint_der_post_a_s103.pt",
+    "checkpoint_der_post_a_s104.pt",
+    "checkpoint_der_fresh_b_s102.pt",
+    "checkpoint_der_fresh_b_s103.pt",
+    "checkpoint_der_fresh_b_s104.pt",
+    "checkpoint_der_seq_b_s102.pt",
+    "checkpoint_der_seq_b_s103.pt",
+    "checkpoint_der_seq_b_s104.pt",
+    "checkpoint_der_diverse_der_s102.pt",
+    "checkpoint_der_diverse_der_s103.pt",
+    "checkpoint_der_diverse_der_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint
