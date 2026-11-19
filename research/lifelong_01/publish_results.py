@@ -102,6 +102,19 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_der_diverse_der_s102.pt",
     "checkpoint_der_diverse_der_s103.pt",
     "checkpoint_der_diverse_der_s104.pt",
+    # SSRL-11 L2-Init + DER++ (M=64 scaled buffer) checkpoints
+    "checkpoint_derm64_post_a_s102.pt",
+    "checkpoint_derm64_post_a_s103.pt",
+    "checkpoint_derm64_post_a_s104.pt",
+    "checkpoint_derm64_fresh_b_s102.pt",
+    "checkpoint_derm64_fresh_b_s103.pt",
+    "checkpoint_derm64_fresh_b_s104.pt",
+    "checkpoint_derm64_seq_b_s102.pt",
+    "checkpoint_derm64_seq_b_s103.pt",
+    "checkpoint_derm64_seq_b_s104.pt",
+    "checkpoint_derm64_diverse_der_m64_s102.pt",
+    "checkpoint_derm64_diverse_der_m64_s103.pt",
+    "checkpoint_derm64_diverse_der_m64_s104.pt",
 }
 MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 
