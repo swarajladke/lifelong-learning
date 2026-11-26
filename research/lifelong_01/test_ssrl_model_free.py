@@ -127,6 +127,8 @@ from research.lifelong_01.ssrl_model import (
     SSRLInstructionMLP,
     SSRLConditionedMLP,
     get_conditioned_parameter_count,
+    SSRLInputGatedMLP,
+    get_input_gated_parameter_count,
 )
 from research.lifelong_01.run_ssrl_joint_reference import (
     interleave_minibatch_schedules,
@@ -210,6 +212,11 @@ from research.lifelong_01.run_ssrl_three_rule_stream import (
     select_multi_rule_stratified_memory,
     build_multi_rule_cyclic_replay_schedule,
     run_three_rule_stream_study,
+)
+from research.lifelong_01.run_ssrl_input_gated_three_rule import (
+    PROPOSED_INPUT_GATED_THREE_RULE_CONFIG,
+    verify_input_gated_three_rule_approval,
+    run_input_gated_three_rule_study,
 )
 
 
@@ -2178,6 +2185,67 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_input_gated_mlp_parameter_count_and_zero_init_neutrality(self):
+        """
+        Verifies SSRLInputGatedMLP parameter count (6658), bit-identical Step-0 forward output
+        vs SSRLInstructionMLP under identical seed, nonzero gate gradient on a single backward
+        step (no zero-init symmetry lock), and ValueError on invalid input dimension.
+        """
+        self.assertEqual(get_input_gated_parameter_count(), 6658)
+        torch.manual_seed(102)
+        m_gated = SSRLInputGatedMLP()
+        torch.manual_seed(102)
+        m_bare = SSRLInstructionMLP()
+        self.assertEqual(sum(p.numel() for p in m_gated.parameters()), 6658)
+        self.assertEqual(sum(p.numel() for p in m_bare.parameters()), 6402)
+
+        x = torch.tensor(
+            [([1.0, -1.0] * 8 + [1.0] * 4 + [0.0] * 12), ([-1.0, 1.0] * 8 + [0.0] * 4 + [1.0] * 4 + [0.0] * 8)],
+            dtype=torch.float32,
+        )
+        m_gated.eval()
+        m_bare.eval()
+        with torch.no_grad():
+            self.assertTrue(torch.equal(m_gated(x), m_bare(x)))
+
+        m_gated.train()
+        m_gated.zero_grad()
+        loss = torch.nn.CrossEntropyLoss()(m_gated(x), torch.tensor([0, 1], dtype=torch.long))
+        loss.backward()
+        self.assertIsNotNone(m_gated.fc_in_gate.weight.grad)
+        self.assertGreater(float(m_gated.fc_in_gate.weight.grad.abs().sum().item()), 0.0)
+
+        with self.assertRaises(ValueError):
+            m_gated(torch.zeros((2, 31), dtype=torch.float32))
+
+    def test_input_gated_three_rule_default_unapproved_guard(self):
+        """
+        Verifies SSRL-14 config is APPROVED, passes verify_input_gated_three_rule_approval,
+        and rejects a copy whose gate_approval_status is PROPOSED_PENDING_APPROVAL.
+        """
+        self.assertEqual(PROPOSED_INPUT_GATED_THREE_RULE_CONFIG["gate_approval_status"], "APPROVED")
+        verify_input_gated_three_rule_approval(PROPOSED_INPUT_GATED_THREE_RULE_CONFIG)
+        cfg = copy.deepcopy(PROPOSED_INPUT_GATED_THREE_RULE_CONFIG)
+        cfg["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_input_gated_three_rule_approval(cfg)
+
+    def test_input_gated_checkpoint_allowlists_synced(self):
+        """
+        Verifies all 27 SSRL-14 checkpoint filenames exist in both ssrl_checkpoints and
+        publish_results allowlists and that both allowlists match identically.
+        """
+        arms = [
+            "post_r1", "fresh_r3", "seq_post_r2", "seq_r3", "der_post_r2", "stream_der_r3",
+            "bare_post_r1", "bare_der_post_r2", "bare_stream_der_r3",
+        ]
+        expected_ckpts = [f"checkpoint_ig3_{arm}_s{seed}.pt" for arm in arms for seed in (102, 103, 104)]
+        self.assertEqual(len(expected_ckpts), 27)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+        self.assertEqual(ALLOWED_CHECKPOINT_FILENAMES, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -3954,6 +4022,91 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
                 with self.assertRaises(exc_cls):
                     run_three_rule_stream_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def test_input_gated_three_rule_tiny_e2e_integration(self):
+        """
+        Tests SSRL-14 3-rule sequential stream tiny CPU E2E execution across 2 seeds, verifying all
+        18 checkpoints, der_loss_steps == 2 ({1: 1, 2: 1}) on gated & bare DER++ arms, nonzero
+        fc_in_gate movement from zero init, and explicit 192/64 denominators across all rules.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1, s1, p2, s2, p3, s3, pp, sp = self._build_temp_ssrl13_inputs(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_INPUT_GATED_THREE_RULE_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_r1"] = 4
+            cfg["step_budget_r2"] = 4
+            cfg["step_budget_r3"] = 8
+            cfg["milestone_r3_steps"] = [0, 4, 8]
+            cfg["enforce_post_r1_learnability_gate"] = False
+            cfg["enforce_bare_post_r1_learnability_gate"] = False
+            cfg["enforce_fresh_r3_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl14_run")
+            dest_json = os.path.join(tmpdir, "ssrl14_results.json")
+            res = run_input_gated_three_rule_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_gated_vs_bare_comparisons"]), 2)
+
+            arms = [
+                "post_r1", "fresh_r3", "seq_post_r2", "seq_r3", "der_post_r2", "stream_der_r3",
+                "bare_post_r1", "bare_der_post_r2", "bare_stream_der_r3",
+            ]
+            for seed in (102, 103):
+                sd = diag["seeds_data"][str(seed)]
+                for arm_key in ("stream_der_r3", "bare_stream_der_r3"):
+                    self.assertEqual(sd[arm_key]["counters"]["der_loss_steps"], 2)
+                    self.assertEqual(sd[arm_key]["counters"]["replay_updates_by_rule"], {"1": 1, "2": 1})
+                    for dk in ("buffer_logit_drift_r1", "buffer_logit_drift_r2"):
+                        self.assertEqual(sd[arm_key][dk]["argmax_match_denominator"], 64)
+                        self.assertEqual(sd[arm_key][dk]["num_logit_floats"], 128)
+                    metrics = sd[arm_key]["final_eval"]["metrics"]
+                    for rk in ("rule_1", "rule_2", "rule_3"):
+                        self.assertEqual(metrics[f"acc_{rk}_seen"].denominator, 192)
+                        self.assertEqual(metrics[f"acc_{rk}_unseen"].denominator, 64)
+                self.assertGreater(sd["stream_der_r3"]["mechanism"]["fc_in_gate_weight_l2"], 0.0)
+                for arm in arms:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_ig3_{arm}_s{seed}.pt")))
+
+    def test_input_gated_three_rule_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-14 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1, s1, p2, s2, p3, s3, pp, sp = self._build_temp_ssrl13_inputs(tmpdir)
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_r1": 2, "step_budget_r2": 4, "step_budget_r3": 8,
+                    "milestone_r3_steps": [0, 4, 8], "gate_g_lc_threshold": 0.99,
+                    "enforce_post_r1_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_r1": 2, "step_budget_r2": 4, "step_budget_r3": 8,
+                    "milestone_r3_steps": [0, 4, 8], "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_INPUT_GATED_THREE_RULE_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"ig3_fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"ig3_fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_input_gated_three_rule_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
                 diag_path = os.path.join(run_dir, "failure_diagnostics.json")
                 self.assertTrue(os.path.exists(diag_path))
                 with open(diag_path, "r", encoding="utf-8") as f:
