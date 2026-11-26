@@ -203,6 +203,14 @@ from research.lifelong_01.run_ssrl_l2init_der_m64_b1000 import (
     verify_l2init_der_m64_b1000_specification_approval,
     run_l2init_der_m64_b1000_study,
 )
+from research.lifelong_01.run_ssrl_three_rule_stream import (
+    PROPOSED_THREE_RULE_STREAM_CONFIG,
+    SHA256_RULE_3_DEFAULT,
+    verify_three_rule_specification_approval,
+    select_multi_rule_stratified_memory,
+    build_multi_rule_cyclic_replay_schedule,
+    run_three_rule_stream_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -2064,6 +2072,112 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_three_rule_stream_specification_approval_guard(self):
+        """
+        Tests that verify_three_rule_specification_approval blocks unapproved
+        execution, verifies pinned hyperparameters, and accepts APPROVED configurations.
+        """
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["study_id"], "SSRL-13")
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["rule_3_id"], 3)
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["rule_3_indices"], [8, 9, 10, 11])
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["step_budget_r1"], 2000)
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["step_budget_r2"], 1000)
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["step_budget_r3"], 1000)
+        self.assertEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["replay_buffer_size_per_rule"], 64)
+        self.assertAlmostEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["l2_init_lambda"], 0.01)
+        self.assertAlmostEqual(PROPOSED_THREE_RULE_STREAM_CONFIG["der_alpha"], 0.5)
+        unapproved = copy.deepcopy(PROPOSED_THREE_RULE_STREAM_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_three_rule_specification_approval(unapproved)
+        approved_cfg = copy.deepcopy(unapproved)
+        approved_cfg["gate_approval_status"] = "APPROVED"
+        verify_three_rule_specification_approval(approved_cfg)
+
+    def test_rule3_pinned_dataset_generator_parity_and_disjoint_coords(self):
+        """
+        Verifies pinned ssrl_pilot_t3_s101.json + manifest SHA-256, field-by-field parity with
+        generate_pilot_dataset_dict (AGENTS.md 6.2), and pairwise disjointness across Rules 1, 2, 3.
+        """
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, load_and_verify_dataset
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        data_path = os.path.join(repo_root, "research", "lifelong_01", "data", "ssrl_pilot_t3_s101.json")
+        manifest_path = os.path.join(repo_root, "research", "lifelong_01", "data", "ssrl_pilot_t3_s101_manifest.json")
+        self.assertTrue(os.path.exists(data_path))
+        self.assertTrue(os.path.exists(manifest_path))
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["dataset_sha256"], SHA256_RULE_3_DEFAULT)
+        self.assertEqual(manifest["rule_indices"], [8, 9, 10, 11])
+
+        d3 = load_and_verify_dataset(
+            data_path,
+            expected_sha256=SHA256_RULE_3_DEFAULT,
+            approved_config={
+                "study_id": "SSRL-13", "phase": "three_rule_sequential_stream",
+                "seed": 101, "partition_seed": 44, "rule_id": 3, "rule_indices": [8, 9, 10, 11],
+                "train_pool_size": 384, "eval_seen_size": 192, "eval_unseen_size": 64,
+            },
+        )
+        d3_regen = generate_pilot_dataset_dict(
+            rule_indices=(8, 9, 10, 11), rule_id=3, seed=101, partition_seed=44,
+            study_id="SSRL-13", phase="three_rule_sequential_stream",
+        )
+        self.assertEqual(d3, d3_regen)
+        coords = (
+            set(PROPOSED_THREE_RULE_STREAM_CONFIG["rule_1_indices"])
+            | set(PROPOSED_THREE_RULE_STREAM_CONFIG["rule_2_indices"])
+            | set(PROPOSED_THREE_RULE_STREAM_CONFIG["rule_3_indices"])
+        )
+        self.assertEqual(len(coords), 12)
+
+    def test_multi_rule_cyclic_replay_schedule_and_allowlist_sync(self):
+        """
+        Tests 3-rule 4:1 alternating cyclic replay schedule (1,000 Rule 3 + 125 Rule 1 + 125 Rule 2
+        with zero cross-rule contamination and full 64-item coverage per prior rule) and verifies
+        all 18 SSRL-13 checkpoint filenames in both allowlists.
+        """
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict
+        from research.lifelong_01.run_ssrl_two_rule import build_minibatch_schedule
+
+        d1 = generate_pilot_dataset_dict((0, 1, 2, 3), 1, 101, partition_seed=42, study_id="SSRL-01", phase="learnability_pilot")
+        d2 = generate_pilot_dataset_dict((4, 5, 6, 7), 2, 101, partition_seed=43, study_id="SSRL-02", phase="two_rule_diagnostic")
+        d3 = generate_pilot_dataset_dict((8, 9, 10, 11), 3, 101, partition_seed=44, study_id="SSRL-13", phase="three_rule_sequential_stream")
+        buf1 = select_stratified_pattern_diverse_memory(d1["train_examples"], [0, 1, 2, 3], 64, 16)
+        buf2 = select_multi_rule_stratified_memory(d2["train_examples"], [4, 5, 6, 7], 64, 16)
+        sched3 = build_minibatch_schedule(d3["train_examples"], 1000, 16, 2028)
+
+        combined = build_multi_rule_cyclic_replay_schedule(sched3, "rule_3", 3, {1: buf1, 2: buf2}, 16, 4, 1)
+        self.assertEqual(len(combined), 1250)
+        r3_steps = [s for s in combined if s[0] == "rule_3"]
+        rep_steps = [s for s in combined if s[0] == "replay"]
+        self.assertEqual(len(r3_steps), 1000)
+        self.assertEqual(len(rep_steps), 250)
+        rep1 = [s for s in rep_steps if s[1] == 1]
+        rep2 = [s for s in rep_steps if s[1] == 2]
+        self.assertEqual(len(rep1), 125)
+        self.assertEqual(len(rep2), 125)
+        self.assertEqual([s[1] for s in rep_steps[:6]], [1, 2, 1, 2, 1, 2])
+        seen_ids_1, seen_ids_2 = set(), set()
+        for _, rid, batch in rep_steps:
+            self.assertEqual(len(batch), 16)
+            self.assertTrue(all(int(ex["rule_id"]) == rid for ex in batch))
+            target_set = seen_ids_1 if rid == 1 else seen_ids_2
+            target_set.update(int(ex["example_id"]) for ex in batch)
+        self.assertEqual(seen_ids_1, {int(ex["example_id"]) for ex in buf1})
+        self.assertEqual(seen_ids_2, {int(ex["example_id"]) for ex in buf2})
+
+        expected_ckpts = []
+        for arm in ["post_r1", "fresh_r3", "seq_post_r2", "seq_r3", "der_post_r2", "stream_der_r3"]:
+            for seed in [102, 103, 104]:
+                expected_ckpts.append(f"checkpoint_r3_{arm}_s{seed}.pt")
+        self.assertEqual(len(expected_ckpts), 18)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -3740,6 +3854,106 @@ class TestSSRLCPUIntegration(unittest.TestCase):
                         probe_dataset_path=path_p, sha256_probe=sha_p,
                         destination=dest_json, run_dir=run_dir, config=cfg,
                     )
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def _build_temp_ssrl13_inputs(self, tmpdir: str):
+        import hashlib
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, serialize_dataset_canonical_json
+        from research.lifelong_01.ssrl_counterfactual_probe import generate_counterfactual_probe_dataset
+
+        d1 = generate_pilot_dataset_dict((0, 1, 2, 3), 1, 101, partition_seed=42, study_id="SSRL-01", phase="learnability_pilot")
+        d2 = generate_pilot_dataset_dict((4, 5, 6, 7), 2, 101, partition_seed=43, study_id="SSRL-02", phase="two_rule_diagnostic")
+        d3 = generate_pilot_dataset_dict((8, 9, 10, 11), 3, 101, partition_seed=44, study_id="SSRL-13", phase="three_rule_sequential_stream")
+        dp = generate_counterfactual_probe_dataset(d1, d2, seed=3030)
+
+        p1, p2, p3, pp = [os.path.join(tmpdir, name) for name in ("r1.json", "r2.json", "r3.json", "probe.json")]
+        sha1 = serialize_dataset_canonical_json(d1, p1)
+        sha2 = serialize_dataset_canonical_json(d2, p2)
+        sha3 = serialize_dataset_canonical_json(d3, p3)
+        raw_p = json.dumps(dp, indent=2, sort_keys=True).encode("utf-8")
+        sha_p = hashlib.sha256(raw_p).hexdigest()
+        with open(pp, "wb") as f:
+            f.write(raw_p)
+        return p1, sha1, p2, sha2, p3, sha3, pp, sha_p
+
+    def test_three_rule_stream_tiny_e2e_integration(self):
+        """
+        Tests SSRL-13 3-rule sequential stream tiny CPU E2E execution across 2 seeds, verifying
+        der_loss_steps == 2 (1 Rule-1 + 1 Rule-2 replay) in stream_der_r3, 64-item drift tracking
+        on R1 and R2, all 6 split metrics (192/64), and all 12 saved checkpoints.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1, s1, p2, s2, p3, s3, pp, sp = self._build_temp_ssrl13_inputs(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_THREE_RULE_STREAM_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_r1"] = 4
+            cfg["step_budget_r2"] = 4
+            cfg["step_budget_r3"] = 8
+            cfg["milestone_r3_steps"] = [0, 4, 8]
+            cfg["enforce_post_r1_learnability_gate"] = False
+            cfg["enforce_fresh_r3_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl13_run")
+            dest_json = os.path.join(tmpdir, "ssrl13_results.json")
+            res = run_three_rule_stream_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_three_rule_comparisons"]), 2)
+
+            for seed in [102, 103]:
+                sd = diag["seeds_data"][str(seed)]
+                stream_r3 = sd["stream_der_r3"]
+                self.assertEqual(stream_r3["counters"]["der_loss_steps"], 2)
+                self.assertEqual(stream_r3["counters"]["replay_updates_by_rule"], {"1": 1, "2": 1})
+                for dk in ("buffer_logit_drift_r1", "buffer_logit_drift_r2"):
+                    self.assertEqual(stream_r3[dk]["argmax_match_denominator"], 64)
+                    self.assertEqual(stream_r3[dk]["num_logit_floats"], 128)
+                metrics = stream_r3["final_eval"]["metrics"]
+                for rk in ("rule_1", "rule_2", "rule_3"):
+                    self.assertEqual(metrics[f"acc_{rk}_seen"].denominator, 192)
+                    self.assertEqual(metrics[f"acc_{rk}_unseen"].denominator, 64)
+                for arm in ["post_r1", "fresh_r3", "seq_post_r2", "seq_r3", "der_post_r2", "stream_der_r3"]:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_r3_{arm}_s{seed}.pt")))
+
+    def test_three_rule_stream_learnability_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-13 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1, s1, p2, s2, p3, s3, pp, sp = self._build_temp_ssrl13_inputs(tmpdir)
+
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_r1": 2, "step_budget_r2": 4, "step_budget_r3": 8,
+                    "milestone_r3_steps": [0, 4, 8], "gate_g_lc_threshold": 0.99,
+                    "enforce_post_r1_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_r1": 2, "step_budget_r2": 4, "step_budget_r3": 8,
+                    "milestone_r3_steps": [0, 4, 8], "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_THREE_RULE_STREAM_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"r3_fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"r3_fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_three_rule_stream_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
                 diag_path = os.path.join(run_dir, "failure_diagnostics.json")
                 self.assertTrue(os.path.exists(diag_path))
                 with open(diag_path, "r", encoding="utf-8") as f:

@@ -117,6 +117,25 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_derm64b1k_diverse_der_m64_b1000_s102.pt",
     "checkpoint_derm64b1k_diverse_der_m64_b1000_s103.pt",
     "checkpoint_derm64b1k_diverse_der_m64_b1000_s104.pt",
+    # SSRL-13 Three-Rule Sequential Stream (Rule 1 -> Rule 2 -> Rule 3) checkpoints
+    "checkpoint_r3_post_r1_s102.pt",
+    "checkpoint_r3_post_r1_s103.pt",
+    "checkpoint_r3_post_r1_s104.pt",
+    "checkpoint_r3_fresh_r3_s102.pt",
+    "checkpoint_r3_fresh_r3_s103.pt",
+    "checkpoint_r3_fresh_r3_s104.pt",
+    "checkpoint_r3_seq_post_r2_s102.pt",
+    "checkpoint_r3_seq_post_r2_s103.pt",
+    "checkpoint_r3_seq_post_r2_s104.pt",
+    "checkpoint_r3_seq_r3_s102.pt",
+    "checkpoint_r3_seq_r3_s103.pt",
+    "checkpoint_r3_seq_r3_s104.pt",
+    "checkpoint_r3_der_post_r2_s102.pt",
+    "checkpoint_r3_der_post_r2_s103.pt",
+    "checkpoint_r3_der_post_r2_s104.pt",
+    "checkpoint_r3_stream_der_r3_s102.pt",
+    "checkpoint_r3_stream_der_r3_s103.pt",
+    "checkpoint_r3_stream_der_r3_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint
