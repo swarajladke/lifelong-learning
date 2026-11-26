@@ -198,6 +198,11 @@ from research.lifelong_01.run_ssrl_l2init_der_m64 import (
     build_cyclic_replay_schedule,
     run_l2init_der_m64_study,
 )
+from research.lifelong_01.run_ssrl_l2init_der_m64_b1000 import (
+    PROPOSED_L2INIT_DER_M64_B1000_CONFIG,
+    verify_l2init_der_m64_b1000_specification_approval,
+    run_l2init_der_m64_b1000_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -1985,6 +1990,80 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_l2init_der_m64_b1000_specification_approval_guard(self):
+        """
+        Tests that verify_l2init_der_m64_b1000_specification_approval blocks unapproved
+        execution, verifies pinned hyperparameters, and accepts APPROVED configurations.
+        """
+        self.assertEqual(PROPOSED_L2INIT_DER_M64_B1000_CONFIG["study_id"], "SSRL-12")
+        self.assertEqual(PROPOSED_L2INIT_DER_M64_B1000_CONFIG["step_budget_b"], 1000)
+        self.assertEqual(
+            PROPOSED_L2INIT_DER_M64_B1000_CONFIG["milestone_b_steps"],
+            [0, 25, 50, 100, 250, 500, 750, 1000],
+        )
+        self.assertEqual(PROPOSED_L2INIT_DER_M64_B1000_CONFIG["replay_buffer_size"], 64)
+        self.assertAlmostEqual(PROPOSED_L2INIT_DER_M64_B1000_CONFIG["l2_init_lambda"], 0.01)
+        self.assertAlmostEqual(PROPOSED_L2INIT_DER_M64_B1000_CONFIG["der_alpha"], 0.5)
+        unapproved = copy.deepcopy(PROPOSED_L2INIT_DER_M64_B1000_CONFIG)
+        unapproved["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_l2init_der_m64_b1000_specification_approval(unapproved)
+        approved_cfg = copy.deepcopy(unapproved)
+        approved_cfg["gate_approval_status"] = "APPROVED"
+        verify_l2init_der_m64_b1000_specification_approval(approved_cfg)
+
+    def test_b1000_schedule_prefix_identity_with_ssrl11(self):
+        """
+        Tests that SSRL-12 (1,000 Task B steps) produces 1,250 total steps (1,000 B + 250 replay_a),
+        matches SSRL-11's 625-step prefix schedule hash identically, and visits the 4 buffer chunks
+        63, 63, 62, 62 times across the 250 replay steps.
+        """
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict
+        from research.lifelong_01.run_ssrl_two_rule import build_minibatch_schedule
+        from research.lifelong_01.run_ssrl_paired_replication import compute_schedule_hash
+
+        da = generate_pilot_dataset_dict(
+            rule_indices=(0, 1, 2, 3), rule_id=1, seed=101, partition_seed=42,
+            study_id="SSRL-01", phase="learnability_pilot",
+        )
+        db = generate_pilot_dataset_dict(
+            rule_indices=(4, 5, 6, 7), rule_id=2, seed=101, partition_seed=43,
+            study_id="SSRL-02", phase="two_rule_diagnostic",
+        )
+        buf = select_stratified_pattern_diverse_memory(da["train_examples"], [0, 1, 2, 3], 64, 16)
+        sched_b_500 = build_minibatch_schedule(db["train_examples"], 500, 16, 2027)
+        sched_b_1000 = build_minibatch_schedule(db["train_examples"], 1000, 16, 2027)
+        cyclic_500 = build_cyclic_replay_schedule(sched_b_500, buf, replay_batch_size=16, ratio_b=4, ratio_a=1)
+        cyclic_1000 = build_cyclic_replay_schedule(sched_b_1000, buf, replay_batch_size=16, ratio_b=4, ratio_a=1)
+
+        self.assertEqual(len(cyclic_1000), 1250)
+        b_steps = [item for item in cyclic_1000 if item[0] == "rule_b"]
+        replay_steps = [item for item in cyclic_1000 if item[0] == "replay_a"]
+        self.assertEqual(len(b_steps), 1000)
+        self.assertEqual(len(replay_steps), 250)
+        self.assertEqual(compute_schedule_hash(cyclic_1000[:625]), compute_schedule_hash(cyclic_500))
+
+        chunk_sigs = [tuple(int(ex["example_id"]) for ex in buf[c * 16 : (c + 1) * 16]) for c in range(4)]
+        counts = {sig: 0 for sig in chunk_sigs}
+        for _, _, chunk in replay_steps:
+            sig = tuple(int(ex["example_id"]) for ex in chunk)
+            counts[sig] += 1
+        self.assertEqual([counts[sig] for sig in chunk_sigs], [63, 63, 62, 62])
+
+    def test_l2init_der_m64_b1000_checkpoint_allowlist_sync(self):
+        """
+        Tests that all 12 SSRL-12 checkpoint filenames exist in both ssrl_checkpoints
+        and publish_results allowlists.
+        """
+        expected_ckpts = []
+        for arm in ["post_a", "fresh_b", "seq_b", "diverse_der_m64_b1000"]:
+            for seed in [102, 103, 104]:
+                expected_ckpts.append(f"checkpoint_derm64b1k_{arm}_s{seed}.pt")
+        self.assertEqual(len(expected_ckpts), 12)
+        for name in expected_ckpts:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -3555,6 +3634,107 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
                 with self.assertRaises(exc_cls):
                     run_l2init_der_m64_study(
+                        dataset_a_path=path_a, sha256_a=sha_a,
+                        dataset_b_path=path_b, sha256_b=sha_b,
+                        probe_dataset_path=path_p, sha256_probe=sha_p,
+                        destination=dest_json, run_dir=run_dir, config=cfg,
+                    )
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def test_l2init_der_m64_b1000_tiny_e2e_integration(self):
+        """
+        Tests SSRL-12 L2-Init + DER++ (M=64, extended horizon) tiny CPU E2E execution across 2 seeds
+        and all 4 arms, verifying der_loss_steps == 2, 128-float / 512-byte teacher logits,
+        64-item buffer drift, aligned milestones [0, 4, 8], and all 8 checkpoint files.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a, sha_a, path_b, sha_b, path_p, sha_p = self._build_temp_ssrl10_inputs(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_L2INIT_DER_M64_B1000_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_a"] = 4
+            cfg["step_budget_b"] = 8
+            cfg["milestone_b_steps"] = [0, 4, 8]
+            cfg["enforce_post_a_learnability_gate"] = False
+            cfg["enforce_fresh_b_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl12_run")
+            dest_json = os.path.join(tmpdir, "ssrl12_results.json")
+            res = run_l2init_der_m64_b1000_study(
+                dataset_a_path=path_a, sha256_a=sha_a,
+                dataset_b_path=path_b, sha256_b=sha_b,
+                probe_dataset_path=path_p, sha256_probe=sha_p,
+                destination=dest_json, run_dir=run_dir, config=cfg,
+            )
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_transfer_comparisons"]), 2)
+            self.assertEqual(len(diag["diverse_memory_example_ids"]), 64)
+
+            for seed in [102, 103]:
+                sdata = diag["seeds_data"][str(seed)]
+                self.assertEqual(sdata["phase_a"]["teacher_logits_num_floats"], 128)
+                self.assertEqual(sdata["phase_a"]["teacher_logits_bytes_float32"], 512)
+                self.assertEqual(len(sdata["phase_a"]["teacher_logits_fingerprint"]), 64)
+
+                seq_drift = sdata["seq_b"]["buffer_logit_drift"]
+                der_drift = sdata["diverse_der_m64_b1000"]["buffer_logit_drift"]
+                self.assertEqual(seq_drift["argmax_match_denominator"], 64)
+                self.assertEqual(der_drift["argmax_match_denominator"], 64)
+                self.assertEqual(der_drift["num_logit_floats"], 128)
+                self.assertEqual(sdata["diverse_der_m64_b1000"]["counters"]["der_loss_steps"], 2)
+                self.assertEqual(sdata["seq_b"]["counters"]["der_loss_steps"], 0)
+                self.assertEqual(set(sdata["diverse_der_m64_b1000"]["milestone_evaluations"].keys()), {"0", "4", "8"})
+                for arm in ["post_a", "fresh_b", "seq_b", "diverse_der_m64_b1000"]:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_derm64b1k_{arm}_s{seed}.pt")))
+
+            self.assertIn("buffer_logit_drift_mse_seq_b", diag["summary_statistics"])
+            self.assertIn("buffer_logit_drift_mse_diverse_der_m64_b1000", diag["summary_statistics"])
+
+    def test_l2init_der_m64_b1000_learnability_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-12 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_a, sha_a, path_b, sha_b, path_p, sha_p = self._build_temp_ssrl10_inputs(tmpdir)
+
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED",
+                    "seeds": [102, 103],
+                    "step_budget_a": 2,
+                    "step_budget_b": 8,
+                    "milestone_b_steps": [0, 4, 8],
+                    "gate_g_lc_threshold": 0.99,
+                    "enforce_post_a_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED",
+                    "seeds": [102, 103],
+                    "step_budget_a": 2,
+                    "step_budget_b": 8,
+                    "milestone_b_steps": [0, 4, 8],
+                    "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_L2INIT_DER_M64_B1000_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"m64b1k_fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"m64b1k_fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_l2init_der_m64_b1000_study(
                         dataset_a_path=path_a, sha256_a=sha_a,
                         dataset_b_path=path_b, sha256_b=sha_b,
                         probe_dataset_path=path_p, sha256_probe=sha_p,

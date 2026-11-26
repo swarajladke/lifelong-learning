@@ -115,6 +115,19 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_derm64_diverse_der_m64_s102.pt",
     "checkpoint_derm64_diverse_der_m64_s103.pt",
     "checkpoint_derm64_diverse_der_m64_s104.pt",
+    # SSRL-12 L2-Init + DER++ (M=64, 1,000-step Task B horizon) checkpoints
+    "checkpoint_derm64b1k_post_a_s102.pt",
+    "checkpoint_derm64b1k_post_a_s103.pt",
+    "checkpoint_derm64b1k_post_a_s104.pt",
+    "checkpoint_derm64b1k_fresh_b_s102.pt",
+    "checkpoint_derm64b1k_fresh_b_s103.pt",
+    "checkpoint_derm64b1k_fresh_b_s104.pt",
+    "checkpoint_derm64b1k_seq_b_s102.pt",
+    "checkpoint_derm64b1k_seq_b_s103.pt",
+    "checkpoint_derm64b1k_seq_b_s104.pt",
+    "checkpoint_derm64b1k_diverse_der_m64_b1000_s102.pt",
+    "checkpoint_derm64b1k_diverse_der_m64_b1000_s103.pt",
+    "checkpoint_derm64b1k_diverse_der_m64_b1000_s104.pt",
 }
 MAX_INDIVIDUAL_CHECKPOINT_BYTES: int = 100 * 1024  # 100 KB limit per approved checkpoint
 
