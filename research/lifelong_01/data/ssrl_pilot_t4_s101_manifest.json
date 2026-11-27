@@ -1,0 +1,21 @@
+{
+  "d": 16,
+  "dataset_filename": "ssrl_pilot_t4_s101.json",
+  "dataset_sha256": "503a09c1f8c059681db038bd472dd7068cbe87f680d963b8e321a9bc652daa71",
+  "eval_seen_examples": 192,
+  "eval_unseen_examples": 64,
+  "k": 4,
+  "partition_seed": 45,
+  "phase": "five_rule_overlapping_stream",
+  "rule_id": 4,
+  "rule_indices": [
+    12,
+    13,
+    14,
+    15
+  ],
+  "seed": 101,
+  "study_id": "SSRL-15",
+  "total_examples": 640,
+  "train_examples": 384
+}

@@ -218,6 +218,15 @@ from research.lifelong_01.run_ssrl_input_gated_three_rule import (
     verify_input_gated_three_rule_approval,
     run_input_gated_three_rule_study,
 )
+from research.lifelong_01.run_ssrl_five_rule_stream import (
+    PROPOSED_FIVE_RULE_STREAM_CONFIG,
+    SHA256_RULE_4_DEFAULT,
+    SHA256_RULE_5_DEFAULT,
+    SHA256_COMP_6_DEFAULT,
+    SHA256_COMP_7_DEFAULT,
+    verify_five_rule_stream_approval,
+    run_five_rule_stream_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -2246,6 +2255,65 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
         self.assertEqual(ALLOWED_CHECKPOINT_FILENAMES, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_ssrl15_pinned_datasets_generator_parity_and_overlap_structure(self):
+        """
+        Verifies all 4 new SSRL-15 pinned datasets (R4, R5 overlapping, zero-shot Comp-6 & Comp-7)
+        and manifests exist, match SHA-256 constants, match generate_pilot_dataset_dict field-by-field,
+        and enforce disjoint R1..R4 spanning {0..15} plus exact 1-bit overlaps for R5=[0,4,8,12].
+        """
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, load_and_verify_dataset
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        data_dir = os.path.join(repo_root, "research", "lifelong_01", "data")
+        specs = [
+            ("ssrl_pilot_t4_s101.json", "ssrl_pilot_t4_s101_manifest.json", SHA256_RULE_4_DEFAULT, (12, 13, 14, 15), 4, 45),
+            ("ssrl_pilot_t5_s101.json", "ssrl_pilot_t5_s101_manifest.json", SHA256_RULE_5_DEFAULT, (0, 4, 8, 12), 5, 46),
+            ("ssrl_pilot_t6_comp_s101.json", "ssrl_pilot_t6_comp_s101_manifest.json", SHA256_COMP_6_DEFAULT, (1, 5, 9, 13), 6, 47),
+            ("ssrl_pilot_t7_comp_s101.json", "ssrl_pilot_t7_comp_s101_manifest.json", SHA256_COMP_7_DEFAULT, (0, 1, 4, 5), 7, 48),
+        ]
+        for fname, mname, exp_sha, coords, rid, pseed in specs:
+            dp = os.path.join(data_dir, fname)
+            mp = os.path.join(data_dir, mname)
+            self.assertTrue(os.path.exists(dp), f"Missing dataset {dp}")
+            self.assertTrue(os.path.exists(mp), f"Missing manifest {mp}")
+            with open(mp, "r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+            self.assertEqual(manifest["dataset_sha256"], exp_sha)
+            self.assertEqual(manifest["rule_indices"], list(coords))
+            ds = load_and_verify_dataset(
+                dp, expected_sha256=exp_sha,
+                approved_config={"study_id": "SSRL-15", "phase": "five_rule_overlapping_stream", "seed": 101, "partition_seed": pseed, "rule_id": rid, "rule_indices": list(coords), "train_pool_size": 384, "eval_seen_size": 192, "eval_unseen_size": 64},
+            )
+            self.assertEqual(ds, generate_pilot_dataset_dict(coords, rid, 101, partition_seed=pseed, study_id="SSRL-15", phase="five_rule_overlapping_stream"))
+
+        r1_4 = [set(PROPOSED_FIVE_RULE_STREAM_CONFIG["rules"][str(r)]) for r in range(1, 5)]
+        self.assertEqual(set().union(*r1_4), set(range(16)))
+        r5 = set(PROPOSED_FIVE_RULE_STREAM_CONFIG["rules"]["5"])
+        for blk in r1_4:
+            self.assertEqual(len(r5 & blk), 1)
+        all_rule_sets = [frozenset(v) for v in PROPOSED_FIVE_RULE_STREAM_CONFIG["rules"].values()] + [frozenset(v) for v in PROPOSED_FIVE_RULE_STREAM_CONFIG["composition_rules"].values()]
+        self.assertEqual(len(set(all_rule_sets)), 7)
+
+    def test_five_rule_stream_default_unapproved_guard_and_allowlists(self):
+        """
+        Verifies SSRL-15 config is APPROVED, passes verify_five_rule_stream_approval, rejects a
+        PROPOSED_PENDING_APPROVAL copy, and matches all 21 checkpoint_ig5_*.pt names across allowlists.
+        """
+        self.assertEqual(PROPOSED_FIVE_RULE_STREAM_CONFIG["gate_approval_status"], "APPROVED")
+        verify_five_rule_stream_approval(PROPOSED_FIVE_RULE_STREAM_CONFIG)
+        cfg = copy.deepcopy(PROPOSED_FIVE_RULE_STREAM_CONFIG)
+        cfg["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_five_rule_stream_approval(cfg)
+
+        arms = ["post_r1", "fresh_r5", "seq_r5", "der_post_r4", "stream_der_r5", "bare_post_r1", "bare_stream_der_r5"]
+        expected = [f"checkpoint_ig5_{arm}_s{seed}.pt" for arm in arms for seed in (102, 103, 104)]
+        self.assertEqual(len(expected), 21)
+        for name in expected:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+        self.assertEqual(ALLOWED_CHECKPOINT_FILENAMES, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -4107,6 +4175,109 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
                 with self.assertRaises(exc_cls):
                     run_input_gated_three_rule_study(p1, s1, p2, s2, p3, s3, pp, sp, dest_json, run_dir, config=cfg)
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def _build_temp_ssrl15_inputs(self, tmpdir: str):
+        import hashlib
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, serialize_dataset_canonical_json
+        from research.lifelong_01.ssrl_counterfactual_probe import generate_counterfactual_probe_dataset
+
+        specs = [
+            ("1", (0, 1, 2, 3), 1, 42, "SSRL-01", "learnability_pilot"),
+            ("2", (4, 5, 6, 7), 2, 43, "SSRL-02", "two_rule_diagnostic"),
+            ("3", (8, 9, 10, 11), 3, 44, "SSRL-13", "three_rule_sequential_stream"),
+            ("4", (12, 13, 14, 15), 4, 45, "SSRL-15", "five_rule_overlapping_stream"),
+            ("5", (0, 4, 8, 12), 5, 46, "SSRL-15", "five_rule_overlapping_stream"),
+            ("6", (1, 5, 9, 13), 6, 47, "SSRL-15", "five_rule_overlapping_stream"),
+            ("7", (0, 1, 4, 5), 7, 48, "SSRL-15", "five_rule_overlapping_stream"),
+        ]
+        paths, shas, ds_objs = {}, {}, {}
+        for k, coords, rid, pseed, st, ph in specs:
+            ds = generate_pilot_dataset_dict(coords, rid, 101, partition_seed=pseed, study_id=st, phase=ph)
+            p = os.path.join(tmpdir, f"r{k}.json")
+            paths[k], shas[k], ds_objs[k] = p, serialize_dataset_canonical_json(ds, p), ds
+        dp = generate_counterfactual_probe_dataset(ds_objs["1"], ds_objs["2"], seed=3030)
+        pp = os.path.join(tmpdir, "probe.json")
+        raw_p = json.dumps(dp, indent=2, sort_keys=True).encode("utf-8")
+        with open(pp, "wb") as f:
+            f.write(raw_p)
+        return paths, shas, pp, hashlib.sha256(raw_p).hexdigest()
+
+    def test_five_rule_stream_tiny_e2e_integration(self):
+        """
+        Tests SSRL-15 5-rule overlapping stream + zero-shot composition tiny CPU E2E across 2 seeds,
+        verifying all 14 checkpoints, Phase-5 replay_updates_by_rule == {1:1, 2:1, 3:1, 4:1},
+        explicit 192/64 denominators on R1..R5 & Comp6..Comp7, nonzero fc_in_gate movement, and byte size < 4 MB.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths, shas, pp, sp = self._build_temp_ssrl15_inputs(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_FIVE_RULE_STREAM_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_per_rule"] = 16
+            cfg["milestone_r5_steps"] = [0, 8, 16]
+            cfg["enforce_post_r1_learnability_gate"] = False
+            cfg["enforce_bare_post_r1_learnability_gate"] = False
+            cfg["enforce_fresh_r5_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl15_run")
+            dest_json = os.path.join(tmpdir, "ssrl15_results.json")
+            res = run_five_rule_stream_study(paths, shas, pp, sp, dest_json, run_dir, config=cfg)
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_five_rule_comparisons"]), 2)
+            self.assertLess(calculate_and_verify_run_size(run_dir), 4_000_000)
+
+            arms = ["post_r1", "fresh_r5", "seq_r5", "der_post_r4", "stream_der_r5", "bare_post_r1", "bare_stream_der_r5"]
+            for seed in (102, 103):
+                sd = diag["seeds_data"][str(seed)]
+                for arm_key in ("stream_der_r5", "bare_stream_der_r5"):
+                    self.assertEqual(sd[arm_key]["counters"]["der_loss_steps"], 4)
+                    self.assertEqual(sd[arm_key]["counters"]["replay_updates_by_rule"], {"1": 1, "2": 1, "3": 1, "4": 1})
+                    metrics = sd[arm_key]["final_eval"]["metrics"]
+                    for rk in ("rule_1", "rule_2", "rule_3", "rule_4", "rule_5", "comp_6", "comp_7"):
+                        self.assertEqual(metrics[f"acc_{rk}_seen"].denominator, 192)
+                        self.assertEqual(metrics[f"acc_{rk}_unseen"].denominator, 64)
+                self.assertGreater(sd["stream_der_r5"]["mechanism"]["fc_in_gate_weight_l2"], 0.0)
+                for arm in arms:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_ig5_{arm}_s{seed}.pt")))
+
+    def test_five_rule_stream_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-15 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths, shas, pp, sp = self._build_temp_ssrl15_inputs(tmpdir)
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_per_rule": 4, "milestone_r5_steps": [0, 4],
+                    "gate_g_lc_threshold": 0.99, "enforce_post_r1_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_per_rule": 4, "milestone_r5_steps": [0, 4],
+                    "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_FIVE_RULE_STREAM_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"ig5_fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"ig5_fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_five_rule_stream_study(paths, shas, pp, sp, dest_json, run_dir, config=cfg)
                 diag_path = os.path.join(run_dir, "failure_diagnostics.json")
                 self.assertTrue(os.path.exists(diag_path))
                 with open(diag_path, "r", encoding="utf-8") as f:

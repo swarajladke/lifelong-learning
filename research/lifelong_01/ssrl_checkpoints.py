@@ -164,6 +164,28 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_ig3_bare_stream_der_r3_s102.pt",
     "checkpoint_ig3_bare_stream_der_r3_s103.pt",
     "checkpoint_ig3_bare_stream_der_r3_s104.pt",
+    # SSRL-15 Five-Rule Overlapping Stream + Zero-Shot Composition (ig5) checkpoints
+    "checkpoint_ig5_post_r1_s102.pt",
+    "checkpoint_ig5_post_r1_s103.pt",
+    "checkpoint_ig5_post_r1_s104.pt",
+    "checkpoint_ig5_fresh_r5_s102.pt",
+    "checkpoint_ig5_fresh_r5_s103.pt",
+    "checkpoint_ig5_fresh_r5_s104.pt",
+    "checkpoint_ig5_seq_r5_s102.pt",
+    "checkpoint_ig5_seq_r5_s103.pt",
+    "checkpoint_ig5_seq_r5_s104.pt",
+    "checkpoint_ig5_der_post_r4_s102.pt",
+    "checkpoint_ig5_der_post_r4_s103.pt",
+    "checkpoint_ig5_der_post_r4_s104.pt",
+    "checkpoint_ig5_stream_der_r5_s102.pt",
+    "checkpoint_ig5_stream_der_r5_s103.pt",
+    "checkpoint_ig5_stream_der_r5_s104.pt",
+    "checkpoint_ig5_bare_post_r1_s102.pt",
+    "checkpoint_ig5_bare_post_r1_s103.pt",
+    "checkpoint_ig5_bare_post_r1_s104.pt",
+    "checkpoint_ig5_bare_stream_der_r5_s102.pt",
+    "checkpoint_ig5_bare_stream_der_r5_s103.pt",
+    "checkpoint_ig5_bare_stream_der_r5_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint
