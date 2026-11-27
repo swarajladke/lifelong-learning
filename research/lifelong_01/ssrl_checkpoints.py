@@ -186,6 +186,25 @@ ALLOWED_CHECKPOINT_FILENAMES = {
     "checkpoint_ig5_bare_stream_der_r5_s102.pt",
     "checkpoint_ig5_bare_stream_der_r5_s103.pt",
     "checkpoint_ig5_bare_stream_der_r5_s104.pt",
+    # SSRL-16 Ten-Rule Sequential Stream + Transfer + Composition (ig10) checkpoints
+    "checkpoint_ig10_post_r1_s102.pt",
+    "checkpoint_ig10_post_r1_s103.pt",
+    "checkpoint_ig10_post_r1_s104.pt",
+    "checkpoint_ig10_seq_r10_s102.pt",
+    "checkpoint_ig10_seq_r10_s103.pt",
+    "checkpoint_ig10_seq_r10_s104.pt",
+    "checkpoint_ig10_der_post_r5_s102.pt",
+    "checkpoint_ig10_der_post_r5_s103.pt",
+    "checkpoint_ig10_der_post_r5_s104.pt",
+    "checkpoint_ig10_stream_der_r10_s102.pt",
+    "checkpoint_ig10_stream_der_r10_s103.pt",
+    "checkpoint_ig10_stream_der_r10_s104.pt",
+    "checkpoint_ig10_bare_post_r1_s102.pt",
+    "checkpoint_ig10_bare_post_r1_s103.pt",
+    "checkpoint_ig10_bare_post_r1_s104.pt",
+    "checkpoint_ig10_bare_stream_der_r10_s102.pt",
+    "checkpoint_ig10_bare_stream_der_r10_s103.pt",
+    "checkpoint_ig10_bare_stream_der_r10_s104.pt",
 }
 
 MAX_CHECKPOINT_FILE_BYTES: int = 100 * 1024  # 100 KB ceiling per checkpoint

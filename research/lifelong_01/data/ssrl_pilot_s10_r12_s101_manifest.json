@@ -1,0 +1,21 @@
+{
+  "d": 16,
+  "dataset_filename": "ssrl_pilot_s10_r12_s101.json",
+  "dataset_sha256": "5dd7618cbf7fb66dfe06636b8b044955816e2fb8396a6af7246ebe8b8e239837",
+  "eval_seen_examples": 192,
+  "eval_unseen_examples": 64,
+  "k": 4,
+  "partition_seed": 53,
+  "phase": "ten_rule_continual_and_transfer",
+  "rule_id": 12,
+  "rule_indices": [
+    1,
+    6,
+    9,
+    12
+  ],
+  "seed": 101,
+  "study_id": "SSRL-16",
+  "total_examples": 640,
+  "train_examples": 384
+}

@@ -227,6 +227,12 @@ from research.lifelong_01.run_ssrl_five_rule_stream import (
     verify_five_rule_stream_approval,
     run_five_rule_stream_study,
 )
+from research.lifelong_01.run_ssrl_ten_rule_stream import (
+    DEFAULT_DATASET_SHA256 as SSRL16_DATASET_SHA256,
+    PROPOSED_TEN_RULE_STREAM_CONFIG,
+    verify_ten_rule_stream_approval,
+    run_ten_rule_stream_study,
+)
 
 
 class TestSSRLModelFree(unittest.TestCase):
@@ -2314,6 +2320,60 @@ class TestSSRLModelFree(unittest.TestCase):
             self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
         self.assertEqual(ALLOWED_CHECKPOINT_FILENAMES, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
 
+    def test_ssrl16_ten_pinned_datasets_parity_and_unique_coordinate_identifiability(self):
+        """
+        Verifies all 10 new SSRL-16 datasets + manifests (Stages 6..10 & Probes 1..5) exist, match
+        DEFAULT_DATASET_SHA256 and generate_pilot_dataset_dict field-by-field, have 17 pairwise-distinct
+        4-bit masks across R1..R17, and uniquely identify every coordinate 0..15 across Stages 1..10.
+        """
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, load_and_verify_dataset
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        data_dir = os.path.join(repo_root, "research", "lifelong_01", "data")
+        new_specs = PROPOSED_TEN_RULE_STREAM_CONFIG["stream_stages"][5:] + PROPOSED_TEN_RULE_STREAM_CONFIG["transfer_probe_specs"]
+        self.assertEqual(len(new_specs), 10)
+        for sp in new_specs:
+            dp = os.path.join(data_dir, sp["file"])
+            mp = os.path.join(data_dir, sp["file"].replace(".json", "_manifest.json"))
+            self.assertTrue(os.path.exists(dp), f"Missing {dp}")
+            self.assertTrue(os.path.exists(mp), f"Missing {mp}")
+            exp_sha = SSRL16_DATASET_SHA256[sp["file"]]
+            with open(mp, "r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+            self.assertEqual(manifest["dataset_sha256"], exp_sha)
+            ds = load_and_verify_dataset(
+                dp, expected_sha256=exp_sha,
+                approved_config={**PROPOSED_TEN_RULE_STREAM_CONFIG, "study_id": sp["study"], "phase": sp["phase"], "seed": 101, "partition_seed": sp["pseed"], "rule_id": sp["rule_id"], "rule_indices": sp["coords"]},
+            )
+            self.assertEqual(ds, generate_pilot_dataset_dict(tuple(sp["coords"]), sp["rule_id"], 101, partition_seed=sp["pseed"], study_id=sp["study"], phase=sp["phase"]))
+
+        all_specs = PROPOSED_TEN_RULE_STREAM_CONFIG["stream_stages"] + PROPOSED_TEN_RULE_STREAM_CONFIG["composition_specs"] + PROPOSED_TEN_RULE_STREAM_CONFIG["transfer_probe_specs"]
+        self.assertEqual(len(all_specs), 17)
+        self.assertEqual(len({frozenset(s["coords"]) for s in all_specs}), 17)
+        stream_coords = [set(sp["coords"]) for sp in PROPOSED_TEN_RULE_STREAM_CONFIG["stream_stages"]]
+        coord_sigs = [tuple(1 if i in sc else 0 for sc in stream_coords) for i in range(16)]
+        self.assertEqual(len(set(coord_sigs)), 16)
+
+    def test_ten_rule_stream_default_unapproved_guard_and_allowlists(self):
+        """
+        Verifies SSRL-16 config is APPROVED, passes verify_ten_rule_stream_approval, rejects a
+        PROPOSED_PENDING_APPROVAL copy, and matches all 18 checkpoint_ig10_*.pt names across allowlists.
+        """
+        self.assertEqual(PROPOSED_TEN_RULE_STREAM_CONFIG["gate_approval_status"], "APPROVED")
+        verify_ten_rule_stream_approval(PROPOSED_TEN_RULE_STREAM_CONFIG)
+        cfg = copy.deepcopy(PROPOSED_TEN_RULE_STREAM_CONFIG)
+        cfg["gate_approval_status"] = "PROPOSED_PENDING_APPROVAL"
+        with self.assertRaises(SpecificationApprovalError):
+            verify_ten_rule_stream_approval(cfg)
+
+        arms = ["post_r1", "seq_r10", "der_post_r5", "stream_der_r10", "bare_post_r1", "bare_stream_der_r10"]
+        expected = [f"checkpoint_ig10_{arm}_s{seed}.pt" for arm in arms for seed in (102, 103, 104)]
+        self.assertEqual(len(expected), 18)
+        for name in expected:
+            self.assertIn(name, ALLOWED_CHECKPOINT_FILENAMES)
+            self.assertIn(name, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+        self.assertEqual(ALLOWED_CHECKPOINT_FILENAMES, PUBLISH_ALLOWED_CHECKPOINT_FILENAMES)
+
 
 class TestSSRLCPUIntegration(unittest.TestCase):
     """
@@ -4278,6 +4338,114 @@ class TestSSRLCPUIntegration(unittest.TestCase):
 
                 with self.assertRaises(exc_cls):
                     run_five_rule_stream_study(paths, shas, pp, sp, dest_json, run_dir, config=cfg)
+                diag_path = os.path.join(run_dir, "failure_diagnostics.json")
+                self.assertTrue(os.path.exists(diag_path))
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)["diagnostics"]
+                self.assertEqual(diag["status"], "FAILED")
+                self.assertEqual(diag["error_type"], exc_name)
+                self.assertEqual(diag["seeds_status"]["102"], "FAILED")
+                self.assertEqual(diag["seeds_status"]["103"], "NOT_RUN")
+                self.assertFalse(os.path.exists(dest_json))
+
+    def _build_temp_ssrl16_dir(self, tmpdir: str):
+        from research.lifelong_01.ssrl_generator import generate_pilot_dataset_dict, serialize_dataset_canonical_json
+        from research.lifelong_01.ssrl_counterfactual_probe import generate_counterfactual_probe_dataset
+
+        data_dir = os.path.join(tmpdir, "ssrl16_data")
+        os.makedirs(data_dir, exist_ok=True)
+        all_specs = (
+            PROPOSED_TEN_RULE_STREAM_CONFIG["stream_stages"]
+            + PROPOSED_TEN_RULE_STREAM_CONFIG["composition_specs"]
+            + PROPOSED_TEN_RULE_STREAM_CONFIG["transfer_probe_specs"]
+        )
+        shas, ds_by_rule = {}, {}
+        for sp in all_specs:
+            ds = generate_pilot_dataset_dict(tuple(sp["coords"]), int(sp["rule_id"]), 101, partition_seed=int(sp["pseed"]), study_id=sp["study"], phase=sp["phase"])
+            shas[sp["file"]] = serialize_dataset_canonical_json(ds, os.path.join(data_dir, sp["file"]))
+            ds_by_rule[int(sp["rule_id"])] = ds
+        dp = generate_counterfactual_probe_dataset(ds_by_rule[1], ds_by_rule[2], seed=3030)
+        raw_p = json.dumps(dp, indent=2, sort_keys=True).encode("utf-8")
+        with open(os.path.join(data_dir, "ssrl_probe_counterfactual_128.json"), "wb") as f:
+            f.write(raw_p)
+        shas["ssrl_probe_counterfactual_128.json"] = hashlib.sha256(raw_p).hexdigest()
+        return data_dir, shas
+
+    def test_ten_rule_stream_and_isolated_probes_tiny_e2e_integration(self):
+        """
+        Tests SSRL-16 10-rule stream + 5 isolated transfer probes tiny CPU E2E across 2 seeds, verifying
+        12 checkpoints, Stage-10 der_loss_steps == 9 covering all 9 prior rules, zero probe carry-over,
+        explicit 192/64 denominators, and run directory bytes < 5 MB.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir, shas = self._build_temp_ssrl16_dir(tmpdir)
+            cfg = copy.deepcopy(PROPOSED_TEN_RULE_STREAM_CONFIG)
+            cfg["gate_approval_status"] = "APPROVED"
+            cfg["seeds"] = [102, 103]
+            cfg["step_budget_per_stream_rule"] = 36
+            cfg["transfer_probe_steps"] = 8
+            cfg["transfer_probe_milestones"] = [0, 4, 8]
+            cfg["enforce_post_r1_learnability_gate"] = False
+            cfg["enforce_bare_post_r1_learnability_gate"] = False
+
+            run_dir = os.path.join(tmpdir, "ssrl16_run")
+            dest_json = os.path.join(tmpdir, "ssrl16_results.json")
+            res = run_ten_rule_stream_study(data_dir, dest_json, run_dir, sha256_overrides=shas, config=cfg)
+            self.assertTrue(os.path.exists(dest_json))
+            diag = res["diagnostics"]
+            self.assertEqual(diag["status"], "COMPLETED")
+            self.assertEqual(len(diag["paired_ten_rule_comparisons"]), 2)
+            self.assertLess(calculate_and_verify_run_size(run_dir), 5_000_000)
+
+            arms = ["post_r1", "seq_r10", "der_post_r5", "stream_der_r10", "bare_post_r1", "bare_stream_der_r10"]
+            expected_prior_ids = {str(sp["rule_id"]): 1 for sp in cfg["stream_stages"][:9]}
+            for seed in (102, 103):
+                sd = diag["seeds_data"][str(seed)]
+                for ak in ("stream_der_r10", "bare_stream_der_r10"):
+                    self.assertEqual(sd[ak]["counters"]["der_loss_steps"], 9)
+                    self.assertEqual(sd[ak]["counters"]["replay_updates_by_rule"], expected_prior_ids)
+                    metrics = sd[ak]["final_eval"]["metrics"]
+                    for st in range(1, 11):
+                        self.assertEqual(metrics[f"acc_stage_{st}_seen"].denominator, 192)
+                        self.assertEqual(metrics[f"acc_stage_{st}_unseen"].denominator, 64)
+                    for ck in ("comp_6", "comp_7"):
+                        self.assertEqual(metrics[f"acc_{ck}_seen"].denominator, 192)
+                        self.assertEqual(metrics[f"acc_{ck}_unseen"].denominator, 64)
+                for arm in arms:
+                    self.assertTrue(os.path.exists(os.path.join(run_dir, f"checkpoint_ig10_{arm}_s{seed}.pt")))
+                probes = sd["isolated_transfer_probes"]["per_probe"]
+                self.assertEqual(len(probes), 5)
+                for p_idx in range(1, 6):
+                    self.assertEqual(probes[f"probe_{p_idx}"]["milestone_deltas"]["8"]["fresh_gated"] >= 0, True)
+
+    def test_ten_rule_stream_gate_and_deadline_failure(self):
+        """
+        Tests that SSRL-16 halts immediately and persists failure_diagnostics.json without writing
+        destination JSON on both LearnabilityGateError and DeadlineExceededError.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir, shas = self._build_temp_ssrl16_dir(tmpdir)
+            scenarios = [
+                ("learnability_gate", LearnabilityGateError, "LearnabilityGateError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_per_stream_rule": 4, "transfer_probe_steps": 4,
+                    "transfer_probe_milestones": [0, 4], "gate_g_lc_threshold": 0.99,
+                    "enforce_post_r1_learnability_gate": True,
+                }),
+                ("deadline_exceeded", DeadlineExceededError, "DeadlineExceededError", {
+                    "gate_approval_status": "APPROVED", "seeds": [102, 103],
+                    "step_budget_per_stream_rule": 4, "transfer_probe_steps": 4,
+                    "transfer_probe_milestones": [0, 4], "wall_clock_ceiling_training_seconds_per_stage": -1.0,
+                }),
+            ]
+            for label, exc_cls, exc_name, overrides in scenarios:
+                cfg = copy.deepcopy(PROPOSED_TEN_RULE_STREAM_CONFIG)
+                cfg.update(overrides)
+                run_dir = os.path.join(tmpdir, f"ig10_fail_run_{label}")
+                dest_json = os.path.join(tmpdir, f"ig10_fail_dest_{label}.json")
+
+                with self.assertRaises(exc_cls):
+                    run_ten_rule_stream_study(data_dir, dest_json, run_dir, sha256_overrides=shas, config=cfg)
                 diag_path = os.path.join(run_dir, "failure_diagnostics.json")
                 self.assertTrue(os.path.exists(diag_path))
                 with open(diag_path, "r", encoding="utf-8") as f:
